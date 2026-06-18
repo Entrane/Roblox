@@ -1,0 +1,34 @@
+# ─── Build Rojo / Roblox ────────────────────────────────────────────────
+# Fichiers de build générés par `rojo build`
+*.rbxl
+*.rbxlx
+*.rbxm
+*.rbxmx
+# Sauvegardes automatiques de Roblox Studio
+*.rbxl.lock
+*.rbxlx.lock
+
+# ─── Outils Lua / Luau ──────────────────────────────────────────────────
+# Dossier de dépendances Wally (gestionnaire de paquets Roblox)
+/Packages/
+/ServerPackages/
+/DevPackages/
+wally.lock
+
+# Cache de l'analyseur statique / Luau LSP
+.luau-analyze/
+sourcemap.json
+
+# ─── Éditeurs / OS ──────────────────────────────────────────────────────
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ─── Divers ─────────────────────────────────────────────────────────────
+*.log
+node_modules/
