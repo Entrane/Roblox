@@ -43,11 +43,13 @@ export type PlayerState = {
 -- ═══════════════════════════════════════════════════════════════════════
 
 -- Phases de la machine à états de manche.
-export type RoundPhase = "Lobby" | "Playing" | "Victory" | "Defeat"
+-- Starting = décompte avant le lancement (annulable si on repasse sous MinPlayers).
+export type RoundPhase = "Lobby" | "Starting" | "Playing" | "Victory" | "Defeat"
 
 -- ⚠️ DOIT rester synchronisé avec le type `RoundPhase` ci-dessus.
 Types.RoundPhase = table.freeze({
 	Lobby = "Lobby" :: "Lobby",
+	Starting = "Starting" :: "Starting",
 	Playing = "Playing" :: "Playing",
 	Victory = "Victory" :: "Victory",
 	Defeat = "Defeat" :: "Defeat",
