@@ -35,6 +35,7 @@ export type PlayerState = {
 	stamina: number, -- 0 .. GameConfig.Stamina.Max
 	battery: number, -- 0 .. GameConfig.Torch.BatteryMax
 	isSprinting: boolean, -- sprint en cours (consomme la stamina)
+	torchOn: boolean, -- torche allumée (consomme la batterie ; le client l'affiche)
 	reviveProgress: number, -- progression de réanimation 0 .. GameConfig.Revive.Duration
 }
 

@@ -125,6 +125,14 @@ GameConfig.Revive = {
 	-- Plus court que l'interaction normale : il faut être collé au coéquipier.
 	Distance = 6, -- studs
 
+	-- Temps qu'un joueur À TERRE met à mourir s'il n'est pas réanimé (Downed → Dead).
+	-- Crée la pression temporelle de la réanimation. ⚠️ PARI.
+	BleedOutTime = 30, -- s
+
+	-- Fraction de stamina rendue à la réanimation réussie (« groggy » = tension).
+	-- 0.5 = moitié de Stamina.Max.
+	StaminaOnRevive = 0.5, -- ratio 0..1
+
 	-- Hypothèse : la réanimation s'ANNULE si le réanimateur s'éloigne (> Distance)
 	-- ou est lui-même mis à terre. Logique gérée dans PlayerState ; ici, constantes.
 	-- ⚠️ À VALIDER DANS STUDIO.
