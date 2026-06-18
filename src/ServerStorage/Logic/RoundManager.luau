@@ -26,6 +26,13 @@
 -- pour lire un état du monde. On reste sur le contexte SERVEUR (les enfants de
 -- ReplicatedStorage sont présents au chargement). Le chemin require est à
 -- confirmer dès la première synchro Rojo.
+--
+-- CHOIX ASSUMÉ — require plutôt qu'injection (uniforme sur tous les modules
+-- Logic) : GameConfig et Types sont des CONSTANTES/TYPES figés, pas des
+-- dépendances comportementales. Les charger est une entorse mineure, pas le
+-- couplage que la règle de pureté visait à interdire. Les require sont
+-- volontairement ISOLÉS dans l'unique bloc ci-dessous : un futur passage à
+-- l'injection (new(deps)) resterait une modif chirurgicale, localisée ici.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage.Shared
