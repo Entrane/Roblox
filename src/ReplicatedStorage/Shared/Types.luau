@@ -114,4 +114,19 @@ export type EntityState = {
 	lastKnownPosition: Vector3?, -- dernière position connue de la cible, ou nil
 }
 
+-- Entrée fournie À EntityAI à chaque update, une par joueur ENCORE SUIVI par
+-- la partie (pas seulement les joueurs visibles — l'absence d'une entrée a un
+-- sens distinct : le joueur a quitté la partie, voir EntityAI). Toute la
+-- géométrie (raycast, cône de vision, occlusion sonore) est déjà résolue par
+-- le Service ici : EntityAI ne fait que des comparaisons numériques sur ces
+-- champs, jamais de calcul 3D.
+export type EntityObservation = {
+	userId: number,
+	distance: number, -- studs, scalaire déjà calculé par le Service
+	visible: boolean, -- Service a résolu Raycast + SightRange + SightAngle
+	audible: boolean, -- Service a résolu HearRange + bruit (sprint, via PlayerState)
+	lifeState: PlayerLifeState, -- Alive / Downed / Dead, lu par le Service dans PlayerState
+	position: Vector3?, -- position actuelle, fournie seulement si visible ou audible
+}
+
 return Types

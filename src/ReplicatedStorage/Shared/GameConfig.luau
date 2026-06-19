@@ -161,7 +161,11 @@ GameConfig.Entity = {
 	-- d'abandonner et de repartir en patrouille.
 	SearchDuration = 8, -- s
 
-	-- Délai sans voir/entendre la cible avant de passer poursuite → recherche.
+	-- Délai sans VOIR la cible avant de passer poursuite → recherche. Le son
+	-- (HearRange) déclenche/réoriente la poursuite mais ne la soutient pas :
+	-- sans la vue, ce délai s'écoule même si la cible est encore entendue
+	-- (sinon le bruit du sprint annulerait l'intérêt de casser la ligne de
+	-- vue — voir le bloc « INTENTION DE DESIGN » ci-dessus).
 	LoseTargetTime = 4, -- s
 
 	-- Attaque.
