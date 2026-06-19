@@ -1,5 +1,5 @@
 -- TEST_Harness — SCRIPT DE TEST TEMPORAIRE. A SUPPRIMER une fois valide.
--- Verifie des cas limites explicites de RoundManager et PlayerState.
+-- Verifie des cas limites explicites de RoundManager, PlayerState et FuseSystem.
 -- Pas de framework : comparaisons manuelles + print PASS/FAIL par scenario.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -9,6 +9,7 @@ local GameConfig = require(ReplicatedStorage.Shared.GameConfig)
 local Types = require(ReplicatedStorage.Shared.Types)
 local RoundManager = require(ServerStorage.Logic.RoundManager)
 local PlayerState = require(ServerStorage.Logic.PlayerState)
+local FuseSystem = require(ServerStorage.Logic.FuseSystem)
 
 local passCount = 0
 local failCount = 0
@@ -185,6 +186,188 @@ scenario("9c. PlayerState areAllIncapacitated() - au moins un Alive -> false", f
 	ps:applyAttack(1) -- Downed, player 2 reste Alive
 	local actual = ps:areAllIncapacitated()
 	rep("false", tostring(actual), actual == false)
+end)
+
+-- ============================================================
+-- FuseSystem
+-- ============================================================
+
+scenario("10. FuseSystem T1 - pickup sur Hidden -> Carried, carriedBy correct", function(rep)
+	local fs = FuseSystem.new()
+	fs:registerFuse(1)
+	local pickupOk = fs:pickup(1, 100)
+	local fuse1 = fs:getState(1)
+	local ok = pickupOk == true and fuse1 ~= nil and fuse1.state == Types.FuseLifeState.Carried and fuse1.carriedBy == 100
+	rep(
+		"pickup=true, state=Carried, carriedBy=100",
+		string.format("pickup=%s, state=%s, carriedBy=%s", tostring(pickupOk), fuse1 and fuse1.state or "nil", tostring(fuse1 and fuse1.carriedBy)),
+		ok
+	)
+end)
+
+scenario("11. FuseSystem cas a/b - pickup sur Carried (autre) et sur Deposited echouent, aucun changement", function(rep)
+	local fs = FuseSystem.new()
+	fs:registerFuse(1)
+	fs:registerFuse(2)
+
+	fs:pickup(1, 100) -- fuse1 Carried par 100
+	local pickupOnCarried = fs:pickup(1, 200) -- cas a : deja Carried par un autre
+	local fuse1 = fs:getState(1)
+
+	fs:pickup(2, 300)
+	fs:deposit(2, 300) -- fuse2 Deposited
+	local pickupOnDeposited = fs:pickup(2, 400) -- cas b : deja Deposited
+	local fuse2 = fs:getState(2)
+
+	local ok = pickupOnCarried == false
+		and fuse1.state == Types.FuseLifeState.Carried and fuse1.carriedBy == 100
+		and pickupOnDeposited == false
+		and fuse2.state == Types.FuseLifeState.Deposited and fuse2.carriedBy == nil
+
+	rep(
+		"pickupOnCarried=false (fuse1 inchange: Carried/100) ; pickupOnDeposited=false (fuse2 inchange: Deposited/nil)",
+		string.format(
+			"pickupOnCarried=%s (fuse1=%s/%s) ; pickupOnDeposited=%s (fuse2=%s/%s)",
+			tostring(pickupOnCarried), fuse1.state, tostring(fuse1.carriedBy),
+			tostring(pickupOnDeposited), fuse2.state, tostring(fuse2.carriedBy)
+		),
+		ok
+	)
+end)
+
+scenario("12. FuseSystem regle (l) - un joueur porte deja un fusible, pickup sur un 2e echoue", function(rep)
+	local fs = FuseSystem.new()
+	fs:registerFuse(1)
+	fs:registerFuse(2)
+	fs:pickup(1, 100) -- 100 porte deja fuse1
+	local pickupSecond = fs:pickup(2, 100) -- meme joueur tente fuse2 -> doit echouer
+	local fuse2 = fs:getState(2)
+	local ok = pickupSecond == false and fuse2.state == Types.FuseLifeState.Hidden and fuse2.carriedBy == nil
+	rep(
+		"pickup(2,100)=false, fuse2 reste Hidden/carriedBy=nil",
+		string.format("pickup(2,100)=%s, fuse2=%s/%s", tostring(pickupSecond), fuse2.state, tostring(fuse2.carriedBy)),
+		ok
+	)
+end)
+
+scenario("13. FuseSystem T2 - deposit par le porteur reussit ; deposit par un usurpateur sur Carried echoue (cas e)", function(rep)
+	local fs = FuseSystem.new()
+	fs:registerFuse(1)
+	fs:registerFuse(2)
+
+	fs:pickup(1, 100)
+	local depositOk = fs:deposit(1, 100) -- T2 : le porteur reel depose
+	local fuse1 = fs:getState(1)
+
+	fs:pickup(2, 200) -- fuse2 Carried par 200
+	local depositByImpostor = fs:deposit(2, 300) -- 300 n'est pas le porteur -> doit echouer
+	local fuse2 = fs:getState(2)
+
+	local ok = depositOk == true and fuse1.state == Types.FuseLifeState.Deposited and fuse1.carriedBy == nil
+		and depositByImpostor == false and fuse2.state == Types.FuseLifeState.Carried and fuse2.carriedBy == 200
+
+	rep(
+		"fuse1: Deposited/nil (depositOk=true) ; fuse2: Carried/200 inchange (depositByImpostor=false)",
+		string.format(
+			"fuse1=%s/%s (depositOk=%s) ; fuse2=%s/%s (depositByImpostor=%s)",
+			fuse1.state, tostring(fuse1.carriedBy), tostring(depositOk),
+			fuse2.state, tostring(fuse2.carriedBy), tostring(depositByImpostor)
+		),
+		ok
+	)
+end)
+
+scenario("14. FuseSystem T3 - releaseCarriedBy() repasse Hidden ; no-op si userId ne porte rien", function(rep)
+	local fs = FuseSystem.new()
+	fs:registerFuse(1)
+	fs:pickup(1, 100)
+	fs:releaseCarriedBy(100)
+	local fuse1 = fs:getState(1)
+
+	fs:releaseCarriedBy(999) -- userId qui ne porte rien -> no-op, ne doit pas planter
+	local fuse1Again = fs:getState(1)
+
+	local ok = fuse1.state == Types.FuseLifeState.Hidden and fuse1.carriedBy == nil
+		and fuse1Again.state == Types.FuseLifeState.Hidden and fuse1Again.carriedBy == nil
+
+	rep(
+		"apres release(100): Hidden/nil ; apres releaseCarriedBy(999) no-op: toujours Hidden/nil",
+		string.format("apres release(100)=%s/%s ; apres releaseCarriedBy(999)=%s/%s", fuse1.state, tostring(fuse1.carriedBy), fuse1Again.state, tostring(fuse1Again.carriedBy)),
+		ok
+	)
+end)
+
+scenario("15. FuseSystem getProgress() - 0/5 avant depot, 1/5 apres un depot", function(rep)
+	local fs = FuseSystem.new()
+	for i = 1, GameConfig.Fuses.Total do
+		fs:registerFuse(i)
+	end
+
+	local before = fs:getProgress()
+
+	fs:pickup(1, 100)
+	fs:deposit(1, 100)
+
+	local after = fs:getProgress()
+
+	local ok = before.collected == 0 and before.required == GameConfig.Fuses.Total
+		and after.collected == 1 and after.required == GameConfig.Fuses.Total
+
+	rep(
+		string.format("avant: collected=0/required=%d ; apres: collected=1/required=%d", GameConfig.Fuses.Total, GameConfig.Fuses.Total),
+		string.format("avant: collected=%d/required=%d ; apres: collected=%d/required=%d", before.collected, before.required, after.collected, after.required),
+		ok
+	)
+end)
+
+scenario("16. FuseSystem resetRound() - tous les fusibles repassent Hidden, carriedBy nil", function(rep)
+	local fs = FuseSystem.new()
+	fs:registerFuse(1)
+	fs:registerFuse(2)
+	fs:registerFuse(3)
+
+	fs:pickup(1, 100) -- fuse1 reste Carried
+	fs:pickup(2, 200)
+	fs:deposit(2, 200) -- fuse2 Deposited
+	-- fuse3 reste Hidden, jamais touche
+
+	fs:resetRound()
+
+	local all = fs:getAllStates()
+	local ok = true
+	for _, fuse in all do
+		if fuse.state ~= Types.FuseLifeState.Hidden or fuse.carriedBy ~= nil then
+			ok = false
+		end
+	end
+
+	rep(
+		"tous les fusibles: state=Hidden, carriedBy=nil",
+		string.format(
+			"fuse1=%s/%s, fuse2=%s/%s, fuse3=%s/%s",
+			all[1].state, tostring(all[1].carriedBy),
+			all[2].state, tostring(all[2].carriedBy),
+			all[3].state, tostring(all[3].carriedBy)
+		),
+		ok
+	)
+end)
+
+scenario("17. FuseSystem registerFuse() idempotent - n'ecrase pas un etat deja Carried", function(rep)
+	local fs = FuseSystem.new()
+	fs:registerFuse(1)
+	fs:pickup(1, 100) -- fuse1 devient Carried par 100
+
+	fs:registerFuse(1) -- second appel, meme id, APRES le pickup -> ne doit rien reecraser
+
+	local fuse1 = fs:getState(1)
+	local ok = fuse1.state == Types.FuseLifeState.Carried and fuse1.carriedBy == 100
+
+	rep(
+		"state=Carried, carriedBy=100 (inchange malgre le second registerFuse)",
+		string.format("state=%s, carriedBy=%s", fuse1.state, tostring(fuse1.carriedBy)),
+		ok
+	)
 end)
 
 print(string.format("==================== TEST_Harness : FIN (%d PASS / %d FAIL) ====================", passCount, failCount))
