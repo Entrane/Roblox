@@ -1,5 +1,5 @@
 -- TEST_Harness — SCRIPT DE TEST TEMPORAIRE. A SUPPRIMER une fois valide.
--- Verifie des cas limites explicites de RoundManager, PlayerState et FuseSystem.
+-- Verifie des cas limites explicites de RoundManager, PlayerState, FuseSystem et EntityAI.
 -- Pas de framework : comparaisons manuelles + print PASS/FAIL par scenario.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -10,6 +10,7 @@ local Types = require(ReplicatedStorage.Shared.Types)
 local RoundManager = require(ServerStorage.Logic.RoundManager)
 local PlayerState = require(ServerStorage.Logic.PlayerState)
 local FuseSystem = require(ServerStorage.Logic.FuseSystem)
+local EntityAI = require(ServerStorage.Logic.EntityAI)
 
 local passCount = 0
 local failCount = 0
@@ -366,6 +367,239 @@ scenario("17. FuseSystem registerFuse() idempotent - n'ecrase pas un etat deja C
 	rep(
 		"state=Carried, carriedBy=100 (inchange malgre le second registerFuse)",
 		string.format("state=%s, carriedBy=%s", fuse1.state, tostring(fuse1.carriedBy)),
+		ok
+	)
+end)
+
+-- ============================================================
+-- EntityAI -- scenarios par SEQUENCES de plusieurs update() successifs
+-- ============================================================
+
+local function mkObs(userId: number, distance: number, visible: boolean, audible: boolean, lifeState: Types.PlayerLifeState, position: Vector3?): Types.EntityObservation
+	return {
+		userId = userId,
+		distance = distance,
+		visible = visible,
+		audible = audible,
+		lifeState = lifeState,
+		position = position or Vector3.new(distance, 0, 0),
+	}
+end
+
+scenario("18. EntityAI E1 - Patrol -> Chase sur un joueur Alive visible (sequence de 3 ticks)", function(rep)
+	local ai = EntityAI.new()
+	ai:update(0.1, { mkObs(1, 20, true, false, Types.LifeState.Alive) })
+	ai:update(0.1, { mkObs(1, 20, true, false, Types.LifeState.Alive) })
+	ai:update(0.1, { mkObs(1, 20, true, false, Types.LifeState.Alive) })
+
+	local phase = ai:getPhase()
+	local target = ai:getState().targetUserId
+	local ok = phase == Types.EntityPhase.Chase and target == 1
+	rep(
+		string.format("phase=%s, target=1", Types.EntityPhase.Chase),
+		string.format("phase=%s, target=%s", phase, tostring(target)),
+		ok
+	)
+end)
+
+scenario("19. EntityAI E2 corrige - audible=true ne retient PAS noContactTimer, Chase -> Search apres 4s cumules", function(rep)
+	local ai = EntityAI.new()
+	ai:update(0.1, { mkObs(1, 10, true, false, Types.LifeState.Alive) }) -- entre en Chase
+	local phaseAfterEnter = ai:getPhase()
+
+	-- 3 ticks de 1s sans vue mais AVEC audible=true : ne doit PAS empecher le decompte
+	ai:update(1, { mkObs(1, 10, false, true, Types.LifeState.Alive) })
+	ai:update(1, { mkObs(1, 10, false, true, Types.LifeState.Alive) })
+	ai:update(1, { mkObs(1, 10, false, true, Types.LifeState.Alive) })
+	local phaseBeforeThreshold = ai:getPhase() -- noContactTimer=3 < 4, doit rester Chase
+
+	-- 4e tick : noContactTimer atteint LoseTargetTime(4) malgre audible=true
+	ai:update(1, { mkObs(1, 10, false, true, Types.LifeState.Alive) })
+	local phaseAfterThreshold = ai:getPhase()
+
+	local ok = phaseAfterEnter == Types.EntityPhase.Chase
+		and phaseBeforeThreshold == Types.EntityPhase.Chase
+		and phaseAfterThreshold == Types.EntityPhase.Search
+
+	rep(
+		"apres entree: Chase ; apres 3s audible-only: Chase (noContactTimer=3<4) ; apres 4s: Search",
+		string.format("apres entree: %s ; apres 3s: %s ; apres 4s: %s", phaseAfterEnter, phaseBeforeThreshold, phaseAfterThreshold),
+		ok
+	)
+end)
+
+scenario("20. EntityAI E3 - Chase -> Attack, coup cyclique selon AttackCooldown (pas a chaque tick)", function(rep)
+	local ai = EntityAI.new()
+	ai:update(0.1, { mkObs(1, 10, true, false, Types.LifeState.Alive) }) -- Patrol -> Chase (hors de portee)
+
+	ai:update(0.1, { mkObs(1, 3, true, false, Types.LifeState.Alive) }) -- Chase -> Attack (transition, pas de frappe ce tick)
+	local phaseAfterAttackEnter = ai:getPhase()
+
+	local hit3 = ai:update(1, { mkObs(1, 3, true, false, Types.LifeState.Alive) }) -- cooldown pret -> frappe
+	local hit4 = ai:update(1, { mkObs(1, 3, true, false, Types.LifeState.Alive) }) -- cooldown=1 (sur 2) -> pas de frappe
+	local hit5 = ai:update(1, { mkObs(1, 3, true, false, Types.LifeState.Alive) }) -- cooldown=0 -> frappe a nouveau
+
+	local ok = phaseAfterAttackEnter == Types.EntityPhase.Attack
+		and hit3 == 1 and hit4 == nil and hit5 == 1
+
+	rep(
+		"apres entree Attack: pas de frappe ; +1s: hit=1 ; +1s: hit=nil (cooldown) ; +1s: hit=1 (cooldown ecoule)",
+		string.format("phaseAttack=%s ; hit3=%s, hit4=%s, hit5=%s", phaseAfterAttackEnter, tostring(hit3), tostring(hit4), tostring(hit5)),
+		ok
+	)
+end)
+
+scenario("21. EntityAI - achevement a deux coups : cible verrouillee maintenue malgre Downed, Dead -> Patrol direct", function(rep)
+	local ai = EntityAI.new()
+	ai:update(0.1, { mkObs(1, 3, true, false, Types.LifeState.Alive) }) -- Patrol -> Chase, deja a portee
+	ai:update(0.1, { mkObs(1, 3, true, false, Types.LifeState.Alive) }) -- Chase -> Attack (transition, pas de frappe)
+
+	local hitStrike1 = ai:update(1, { mkObs(1, 3, true, false, Types.LifeState.Alive) }) -- cooldown pret -> frappe 1
+	-- Le Service aurait appele PlayerState.applyAttack(1) ici : Alive -> Downed (simule ci-dessous).
+
+	local hitNoCooldown = ai:update(1, { mkObs(1, 3, true, false, Types.LifeState.Downed) }) -- cooldown pas encore ecoule
+	local targetWhileDowned = ai:getState().targetUserId
+	local phaseWhileDowned = ai:getPhase()
+
+	local hitStrike2 = ai:update(1, { mkObs(1, 3, true, false, Types.LifeState.Downed) }) -- cooldown ecoule -> frappe 2
+	-- Le Service aurait appele PlayerState.applyAttack(1) ici : Downed -> Dead (simule ci-dessous).
+
+	ai:update(1, { mkObs(1, 3, true, false, Types.LifeState.Dead) })
+	local phaseAfterDeath = ai:getPhase()
+	local targetAfterDeath = ai:getState().targetUserId
+
+	local ok = hitStrike1 == 1
+		and targetWhileDowned == 1 and phaseWhileDowned == Types.EntityPhase.Attack and hitNoCooldown == nil
+		and hitStrike2 == 1
+		and phaseAfterDeath == Types.EntityPhase.Patrol and targetAfterDeath == nil
+
+	rep(
+		"frappe1=1 ; reste verrouille sur 1 pendant Downed (Attack, pas de re-evaluation) ; frappe2=1 (achevement) ; puis Patrol direct, target=nil",
+		string.format(
+			"frappe1=%s ; pendant Downed: target=%s phase=%s hit=%s ; frappe2=%s ; apres mort: phase=%s target=%s",
+			tostring(hitStrike1), tostring(targetWhileDowned), phaseWhileDowned, tostring(hitNoCooldown),
+			tostring(hitStrike2), phaseAfterDeath, tostring(targetAfterDeath)
+		),
+		ok
+	)
+end)
+
+scenario("22. EntityAI Partie C - priorite Alive > Downed (dernier recours)", function(rep)
+	local ai = EntityAI.new()
+	local obs = {
+		mkObs(1, 5, true, false, Types.LifeState.Downed), -- proche, Downed
+		mkObs(2, 30, true, false, Types.LifeState.Alive), -- loin, Alive
+	}
+	ai:update(0.1, obs)
+	ai:update(0.1, obs)
+
+	local target = ai:getState().targetUserId
+	local ok = target == 2
+
+	rep("target=2 (Alive, malgre un Downed plus proche)", string.format("target=%s", tostring(target)), ok)
+end)
+
+scenario("23. EntityAI Partie D.2 - pas de re-engagement : cible verrouillee ignore un candidat plus proche", function(rep)
+	local ai = EntityAI.new()
+	ai:update(0.1, { mkObs(1, 20, true, false, Types.LifeState.Alive) }) -- verrouille sur A
+
+	ai:update(0.1, {
+		mkObs(1, 20, true, false, Types.LifeState.Alive),
+		mkObs(2, 5, true, false, Types.LifeState.Alive), -- B, plus proche, apparait
+	})
+	ai:update(0.1, {
+		mkObs(1, 20, true, false, Types.LifeState.Alive),
+		mkObs(2, 5, true, false, Types.LifeState.Alive),
+	})
+
+	local target = ai:getState().targetUserId
+	local ok = target == 1
+
+	rep("target=1 (A, inchange malgre B plus proche)", string.format("target=%s", tostring(target)), ok)
+end)
+
+scenario("24a. EntityAI regle transverse - lifeState Dead -> Patrol direct (jamais Search)", function(rep)
+	local ai = EntityAI.new()
+	ai:update(0.1, { mkObs(1, 20, true, false, Types.LifeState.Alive) }) -- Chase
+	ai:update(1, { mkObs(1, 20, true, false, Types.LifeState.Dead) }) -- cible devient Dead
+
+	local phase = ai:getPhase()
+	local target = ai:getState().targetUserId
+	local ok = phase == Types.EntityPhase.Patrol and target == nil
+
+	rep("phase=Patrol, target=nil", string.format("phase=%s, target=%s", phase, tostring(target)), ok)
+end)
+
+scenario("24b. EntityAI regle transverse - cible absente des observations -> Patrol direct (jamais Search)", function(rep)
+	local ai = EntityAI.new()
+	ai:update(0.1, { mkObs(1, 20, true, false, Types.LifeState.Alive) }) -- Chase
+	ai:update(1, {}) -- joueur 1 a quitte la partie, absent de la liste
+
+	local phase = ai:getPhase()
+	local target = ai:getState().targetUserId
+	local ok = phase == Types.EntityPhase.Patrol and target == nil
+
+	rep("phase=Patrol, target=nil", string.format("phase=%s, target=%s", phase, tostring(target)), ok)
+end)
+
+scenario("25. EntityAI E5 - Search -> Patrol apres SearchDuration cumule (cible toujours presente, sans contact)", function(rep)
+	local ai = EntityAI.new()
+	ai:update(0.1, { mkObs(1, 10, true, false, Types.LifeState.Alive) }) -- Chase
+
+	-- 4 ticks de 1s sans aucun contact -> Chase -> Search (LoseTargetTime=4)
+	for _ = 1, 4 do
+		ai:update(1, { mkObs(1, 10, false, false, Types.LifeState.Alive) })
+	end
+	local phaseEnteredSearch = ai:getPhase()
+
+	-- 7 ticks supplementaires en Search, toujours sans contact (joueur encore present)
+	for _ = 1, 7 do
+		ai:update(1, { mkObs(1, 10, false, false, Types.LifeState.Alive) })
+	end
+	local phaseBeforeTimeout = ai:getPhase() -- stateTimer=7 < SearchDuration(8)
+
+	-- 8e tick en Search : SearchDuration atteint
+	ai:update(1, { mkObs(1, 10, false, false, Types.LifeState.Alive) })
+	local phaseAfterTimeout = ai:getPhase()
+	local target = ai:getState().targetUserId
+	local lastPos = ai:getState().lastKnownPosition
+
+	local ok = phaseEnteredSearch == Types.EntityPhase.Search
+		and phaseBeforeTimeout == Types.EntityPhase.Search
+		and phaseAfterTimeout == Types.EntityPhase.Patrol
+		and target == nil and lastPos == nil
+
+	rep(
+		"entre en Search ; reste Search a 7s ; Patrol a 8s, target=nil, lastKnownPosition=nil",
+		string.format("apres perte de vue: %s ; a 7s: %s ; a 8s: %s, target=%s, lastPos=%s",
+			phaseEnteredSearch, phaseBeforeTimeout, phaseAfterTimeout, tostring(target), tostring(lastPos)),
+		ok
+	)
+end)
+
+scenario("26. EntityAI E4 - Search -> Chase avec changement de cible (B different de A)", function(rep)
+	local ai = EntityAI.new()
+	ai:update(0.1, { mkObs(1, 10, true, false, Types.LifeState.Alive) }) -- Chase sur A
+
+	for _ = 1, 4 do
+		ai:update(1, { mkObs(1, 10, false, false, Types.LifeState.Alive) })
+	end
+	local phaseInSearch = ai:getPhase() -- Search
+
+	-- B (different de A) devient visible pendant que A reste present sans contact
+	ai:update(1, {
+		mkObs(1, 10, false, false, Types.LifeState.Alive),
+		mkObs(2, 15, true, false, Types.LifeState.Alive),
+	})
+
+	local phase = ai:getPhase()
+	local target = ai:getState().targetUserId
+
+	local ok = phaseInSearch == Types.EntityPhase.Search and phase == Types.EntityPhase.Chase and target == 2
+
+	rep(
+		"entre en Search sur A ; redetection de B -> Chase, target=2 (pas 1)",
+		string.format("phaseSearch=%s ; apres redetection: phase=%s, target=%s", phaseInSearch, phase, tostring(target)),
 		ok
 	)
 end)
