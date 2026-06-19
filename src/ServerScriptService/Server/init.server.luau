@@ -1,6 +1,12 @@
 --!strict
 -- init.server — Point d'entrée serveur.
 -- Requiert et initialise les Services DANS UN ORDRE DÉTERMINISTE.
--- Placeholder Tâche 1 : le câblage réel arrive en Tâche 3.
+-- RoundService en premier : c'est la colonne vertébrale temporelle, les
+-- futurs Services (FuseService, PlayerService, EntityService) appelleront
+-- RoundService.getRoundManager() pour s'y greffer.
 
-print("[Signal Lost] Serveur démarré (placeholder Tâche 1).")
+local RoundService = require(script.RoundService)
+
+RoundService.init()
+
+print("[Signal Lost] Serveur démarré.")
