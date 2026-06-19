@@ -83,17 +83,18 @@ end
 -- ───────────────────────────────────────────────────────────────────────
 
 local function onPhaseChanged(previous: Types.RoundPhase, current: Types.RoundPhase)
+	-- Trace de TOUTES les transitions : seul endroit du projet qui les détecte
+	-- (RoundManager reste passif). Permet de suivre le déroulé d'une manche en
+	-- Studio sans interface, et restera utile au debug une fois le HUD en place.
+	print(string.format("[RoundService] Transition de phase : %s -> %s", previous, current))
+
 	if current == Types.RoundPhase.Lobby or current == Types.RoundPhase.Starting or current == Types.RoundPhase.Playing then
 		teleportAllPlayersToSpawn()
 	end
 
-	if current == Types.RoundPhase.Victory or current == Types.RoundPhase.Defeat then
-		-- Aucune action sur le monde : les joueurs restent où l'instant les a
-		-- trouvés (sortie atteinte / dernier debout tombé). Le HUD viendra
-		-- plus tard ; pour l'instant on trace juste la transition pour pouvoir
-		-- tester en Studio sans interface.
-		print(string.format("[RoundService] Manche terminée : %s -> %s", previous, current))
-	end
+	-- Victory/Defeat : aucune action sur le monde — les joueurs restent où
+	-- l'instant les a trouvés (sortie atteinte / dernier debout tombé). Le HUD
+	-- viendra plus tard ; la trace ci-dessus suffit à tester en Studio.
 end
 
 -- ───────────────────────────────────────────────────────────────────────
