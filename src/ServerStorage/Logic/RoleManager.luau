@@ -138,6 +138,15 @@ function RoleManager.onPlayerLeft(self: RoleManager, userId: number)
 	end
 
 	self.roles[userId] = nil
+
+	-- ⚠️ COUPLAGE FRAGILE — NE PAS SUPPRIMER CE BLOC. echoUserId est un raccourci
+	-- MÉMORISÉ (pas recalculé à la lecture, cf. note sur le champ dans le type).
+	-- Si l'Écho humain part et qu'on OUBLIE de remettre echoUserId/humanEcho à zéro
+	-- ici, getEchoUserId() continuera de renvoyer un userId FANTÔME (joueur déjà
+	-- déconnecté) et isHumanEcho() restera true à tort → le Service ne basculerait
+	-- jamais sur l'Écho IA (cf. DÉCISION « l'Écho humain quitte » en tête de
+	-- fichier). C'est le SEUL endroit qui maintient cet invariant : toute lecture de
+	-- echoUserId en dépend.
 	if self.echoUserId == userId then
 		self.echoUserId = nil
 		self.humanEcho = false

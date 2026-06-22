@@ -11,6 +11,7 @@ local RoundManager = require(ServerStorage.Logic.RoundManager)
 local PlayerState = require(ServerStorage.Logic.PlayerState)
 local FuseSystem = require(ServerStorage.Logic.FuseSystem)
 local EntityAI = require(ServerStorage.Logic.EntityAI)
+local RoleManager = require(ServerStorage.Logic.RoleManager)
 
 local passCount = 0
 local failCount = 0
@@ -600,6 +601,115 @@ scenario("26. EntityAI E4 - Search -> Chase avec changement de cible (B differen
 	rep(
 		"entre en Search sur A ; redetection de B -> Chase, target=2 (pas 1)",
 		string.format("phaseSearch=%s ; apres redetection: phase=%s, target=%s", phaseInSearch, phase, tostring(target)),
+		ok
+	)
+end)
+
+-- ============================================================
+-- RoleManager
+-- ============================================================
+
+scenario("27. RoleManager - rotation round-robin de l'Echo sur plusieurs manches (1->2->3->1)", function(rep)
+	local rm = RoleManager.new()
+	rm:onPlayerJoined(1)
+	rm:onPlayerJoined(2)
+	rm:onPlayerJoined(3) -- file = [1,2,3], effectif 3 >= HumanEchoMinPlayers(3)
+
+	local echos = {}
+	for _ = 1, 4 do
+		rm:assignRoles({ 1, 2, 3 })
+		table.insert(echos, rm:getEchoUserId())
+		rm:resetRoundAssignment()
+	end
+
+	-- Chacun son tour : 1, puis 2, puis 3, puis on reboucle sur 1.
+	local ok = echos[1] == 1 and echos[2] == 2 and echos[3] == 3 and echos[4] == 1
+	rep(
+		"Echos successifs = 1, 2, 3, 1",
+		string.format("Echos = %s, %s, %s, %s", tostring(echos[1]), tostring(echos[2]), tostring(echos[3]), tostring(echos[4])),
+		ok
+	)
+end)
+
+scenario("28. RoleManager - doublon dans playerIds dedoublonne (compte reel < seuil -> Echo IA)", function(rep)
+	local rm = RoleManager.new()
+	rm:onPlayerJoined(1)
+	rm:onPlayerJoined(2) -- 2 joueurs reels seulement
+
+	-- playerIds contient un doublon (1 deux fois). Sans dedoublonnage, le compte
+	-- paraitrait = 3 et basculerait a tort sur un Echo HUMAIN. Avec dedoublonnage,
+	-- compte reel = 2 < HumanEchoMinPlayers(3) -> Echo IA.
+	rm:assignRoles({ 1, 1, 2 })
+
+	local humanEcho = rm:isHumanEcho()
+	local echoId = rm:getEchoUserId()
+	local ok = humanEcho == false and echoId == nil
+	rep(
+		"isHumanEcho=false, getEchoUserId=nil (doublon ignore, compte reel=2<3)",
+		string.format("isHumanEcho=%s, getEchoUserId=%s", tostring(humanEcho), tostring(echoId)),
+		ok
+	)
+end)
+
+scenario("29. RoleManager - tete de file absente sautee + joueur hors file jamais Echo (sans blocage)", function(rep)
+	local rm = RoleManager.new()
+	rm:onPlayerJoined(1)
+	rm:onPlayerJoined(2)
+	rm:onPlayerJoined(3)
+	rm:onPlayerJoined(4) -- file = [1,2,3,4]
+
+	-- Manche a 3 joueurs presents : 1 (tete de file) est ABSENT, et 99 est present
+	-- mais jamais passe par onPlayerJoined (absent de la file).
+	rm:assignRoles({ 2, 3, 99 })
+
+	local echoId = rm:getEchoUserId() -- doit sauter 1 (absent) -> premier present en file = 2
+	local role99 = rm:getRole(99) -- present mais hors file -> Survivor, jamais Echo
+	local role2 = rm:getRole(2)
+	local ok = echoId == 2
+		and role99 == Types.Role.Survivor
+		and role2 == Types.Role.Echo
+	rep(
+		"getEchoUserId=2 (1 absent saute), getRole(99)=Survivor (hors file), getRole(2)=Echo",
+		string.format("getEchoUserId=%s, getRole(99)=%s, getRole(2)=%s", tostring(echoId), tostring(role99), tostring(role2)),
+		ok
+	)
+end)
+
+scenario("30. RoleManager - depart de l'Echo humain : humanEcho->false, echoUserId->nil, retire de la file", function(rep)
+	local rm = RoleManager.new()
+	rm:onPlayerJoined(1)
+	rm:onPlayerJoined(2)
+	rm:onPlayerJoined(3)
+	rm:assignRoles({ 1, 2, 3 }) -- Echo humain = 1
+
+	local echoBefore = rm:getEchoUserId()
+
+	rm:onPlayerLeft(1) -- l'Echo humain quitte EN COURS de manche
+
+	local echoAfter = rm:getEchoUserId()
+	local humanEchoAfter = rm:isHumanEcho()
+	local roleAfter = rm:getRole(1)
+
+	-- 1 ne doit plus figurer dans la file de rotation.
+	local queue = rm:getQueueSnapshot()
+	local stillInQueue = false
+	for _, id in queue do
+		if id == 1 then
+			stillInQueue = true
+		end
+	end
+
+	local ok = echoBefore == 1
+		and echoAfter == nil
+		and humanEchoAfter == false
+		and roleAfter == nil
+		and stillInQueue == false
+	rep(
+		"avant: echo=1 ; apres depart: echoUserId=nil, isHumanEcho=false, getRole(1)=nil, absent de la file",
+		string.format(
+			"echoBefore=%s ; echoAfter=%s, isHumanEcho=%s, getRole(1)=%s, encoreDansFile=%s",
+			tostring(echoBefore), tostring(echoAfter), tostring(humanEchoAfter), tostring(roleAfter), tostring(stillInQueue)
+		),
 		ok
 	)
 end)
