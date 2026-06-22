@@ -16,12 +16,11 @@
 --     déjà pour câbler RoundManager) et appelle releaseCarriedBy(userId) au bon
 --     moment. Un seul point d'entrée pour les trois causes (départ, Downed,
 --     Dead) : ce module ne distingue pas la cause, seulement l'effet.
---   - la décision « objectif complet » (RoundManager.onObjectiveComplete()) NE
---     SE PREND PAS ICI : FuseSystem expose seulement le FAIT (getProgress) ;
---     c'est au Service de combiner ce fait avec d'autres conditions du monde
---     (ex. sortie atteinte) avant d'appeler RoundManager. Cf. le commentaire
---     déjà présent dans RoundManager.onObjectiveComplete : « ce n'est PAS «5
---     fusibles déposés», mais bien «sortie atteinte» ».
+--   - la décision « objectif complet » NE SE PREND PAS ICI : FuseSystem expose
+--     seulement le FAIT (getProgress) ; c'est au Service de combiner ce fait avec
+--     d'autres conditions du monde (ex. sortie atteinte) avant de résoudre la
+--     manche via RoundService. Le « 5 fusibles déposés » n'est qu'un JALON, pas
+--     la fin : la fin, c'est « sortie atteinte » (évasion individuelle en PvP).
 --
 -- Pas de update(dt) dans ce module : GameConfig.Interaction.FuseGrabTime = 0
 -- (ramassage instantané) ⇒ aucun état n'évolue avec le temps. Si un futur temps

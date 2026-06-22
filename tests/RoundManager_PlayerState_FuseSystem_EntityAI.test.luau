@@ -76,26 +76,32 @@ scenario("3. RoundManager T3 - update(dt) > LobbyDuration pendant Starting -> Pl
 	rep(Types.RoundPhase.Playing, actual, actual == Types.RoundPhase.Playing)
 end)
 
-scenario("4. RoundManager cas d - victoire gagne le timeout (objectiveComplete + dt > MaxRoundDuration meme tick)", function(rep)
+scenario("4. RoundManager - la resolution gagne le timeout (onRoundResolved(Survivors) + dt > MaxRoundDuration meme tick)", function(rep)
 	local round = RoundManager.new()
 	round:onPlayerJoined(1)
 	round:update(0) -- Starting
 	round:update(GameConfig.Round.LobbyDuration + 0.1) -- Playing
-	round:onObjectiveComplete()
+	round:onRoundResolved(Types.Faction.Survivors)
 	round:update(GameConfig.Round.MaxRoundDuration + 100) -- depasse aussi le garde-fou de duree
-	local actual = round:getPhase()
-	rep(Types.RoundPhase.Victory, actual, actual == Types.RoundPhase.Victory)
+	local phase = round:getPhase()
+	local winner = round:getState().winner
+	local ok = phase == Types.RoundPhase.Resolved and winner == Types.Faction.Survivors
+	rep(
+		string.format("phase=%s, winner=%s", Types.RoundPhase.Resolved, Types.Faction.Survivors),
+		string.format("phase=%s, winner=%s", phase, tostring(winner)),
+		ok
+	)
 end)
 
-scenario("5. RoundManager - onObjectiveComplete() en Lobby est ignore", function(rep)
+scenario("5. RoundManager - onRoundResolved() en Lobby est ignore (pas de winner hors Playing)", function(rep)
 	local round = RoundManager.new()
-	round:onObjectiveComplete()
+	round:onRoundResolved(Types.Faction.Survivors)
 	local actualPhase = round:getPhase()
-	local actualFlag = (round :: any).objectiveComplete
-	local ok = actualPhase == Types.RoundPhase.Lobby and actualFlag == false
+	local actualWinner = round:getState().winner
+	local ok = actualPhase == Types.RoundPhase.Lobby and actualWinner == nil
 	rep(
-		string.format("phase=%s, objectiveComplete=false", Types.RoundPhase.Lobby),
-		string.format("phase=%s, objectiveComplete=%s", actualPhase, tostring(actualFlag)),
+		string.format("phase=%s, winner=nil", Types.RoundPhase.Lobby),
+		string.format("phase=%s, winner=%s", actualPhase, tostring(actualWinner)),
 		ok
 	)
 end)
@@ -710,6 +716,95 @@ scenario("30. RoleManager - depart de l'Echo humain : humanEcho->false, echoUser
 			"echoBefore=%s ; echoAfter=%s, isHumanEcho=%s, getRole(1)=%s, encoreDansFile=%s",
 			tostring(echoBefore), tostring(echoAfter), tostring(humanEchoAfter), tostring(roleAfter), tostring(stillInQueue)
 		),
+		ok
+	)
+end)
+
+-- ============================================================
+-- RoundManager -- refonte PvP (etat terminal Resolved + onRoundResolved)
+-- ============================================================
+
+-- Helper : amene une instance fraiche jusqu'a Playing (1 joueur suffit, MinPlayers=1).
+local function newRoundInPlaying()
+	local round = RoundManager.new()
+	round:onPlayerJoined(1)
+	round:update(0) -- Lobby -> Starting
+	round:update(GameConfig.Round.LobbyDuration + 0.1) -- Starting -> Playing
+	return round
+end
+
+scenario("31. RoundManager - le timeout n'auto-resout PLUS (reste Playing/winner nil), puis Service nomme Echo", function(rep)
+	local round = newRoundInPlaying()
+	round:update(GameConfig.Round.MaxRoundDuration + 100) -- timer expire SANS onRoundResolved
+	local phaseAfterTimeout = round:getPhase()
+	local winnerAfterTimeout = round:getState().winner
+
+	-- C'est le Service qui nomme la faction sur timeout : temps ecoule -> Echo.
+	round:onRoundResolved(Types.Faction.Echo)
+	round:update(0.1) -- applique Playing -> Resolved
+	local phaseResolved = round:getPhase()
+	local winnerResolved = round:getState().winner
+
+	local ok = phaseAfterTimeout == Types.RoundPhase.Playing and winnerAfterTimeout == nil
+		and phaseResolved == Types.RoundPhase.Resolved and winnerResolved == Types.Faction.Echo
+	rep(
+		"timer expire: Playing/winner=nil ; puis onRoundResolved(Echo): Resolved/winner=Echo",
+		string.format("apres timeout: %s/%s ; apres resolution: %s/%s",
+			phaseAfterTimeout, tostring(winnerAfterTimeout), phaseResolved, tostring(winnerResolved)),
+		ok
+	)
+end)
+
+scenario("32. RoundManager - Resolved -> Lobby apres IntermissionDuration (ex-T8/T9), winner remis a nil", function(rep)
+	local round = newRoundInPlaying()
+	round:onRoundResolved(Types.Faction.Echo)
+	round:update(0.1) -- Playing -> Resolved
+	local phaseResolved = round:getPhase()
+
+	round:update(GameConfig.Round.IntermissionDuration + 0.1) -- intermission ecoulee
+	local phaseAfter = round:getPhase()
+	local winnerAfter = round:getState().winner
+
+	local ok = phaseResolved == Types.RoundPhase.Resolved
+		and phaseAfter == Types.RoundPhase.Lobby and winnerAfter == nil
+	rep(
+		"Resolved puis Lobby (winner remis a nil)",
+		string.format("phaseResolved=%s ; apres intermission: %s, winner=%s", phaseResolved, phaseAfter, tostring(winnerAfter)),
+		ok
+	)
+end)
+
+scenario("33. RoundManager - abandon (playerCount=0) en Playing -> Lobby, jette tout winner (ex-T7)", function(rep)
+	local round = newRoundInPlaying()
+	round:onRoundResolved(Types.Faction.Survivors) -- winner pose...
+	round:onPlayerLeft(1) -- ...mais le dernier joueur quitte le meme tick
+	round:update(0.1) -- abandon PRIORITAIRE sur la resolution
+
+	local phase = round:getPhase()
+	local winner = round:getState().winner
+	local ok = phase == Types.RoundPhase.Lobby and winner == nil
+	rep(
+		"phase=Lobby, winner=nil (abandon prioritaire, winner jete)",
+		string.format("phase=%s, winner=%s", phase, tostring(winner)),
+		ok
+	)
+end)
+
+scenario("34. RoundManager - onRoundResolved idempotent (premier gagne) + faction invalide ignoree", function(rep)
+	local round = newRoundInPlaying()
+	round:onRoundResolved("Bidon" :: any) -- faction invalide -> ne verrouille rien
+	round:onRoundResolved(Types.Faction.Survivors) -- premier valide -> verrouille
+	round:onRoundResolved(Types.Faction.Echo) -- deuxieme valide -> ignore
+	round:update(0.1) -- applique
+
+	local phase = round:getPhase()
+	local winner = round:getState().winner
+	-- Si l'invalide avait verrouille, le Survivors suivant serait ignore et le
+	-- winner final serait "Bidon" -> l'assertion winner==Survivors prouve le rejet.
+	local ok = phase == Types.RoundPhase.Resolved and winner == Types.Faction.Survivors
+	rep(
+		"Survivors verrouille (invalide rejete, Echo ulterieur ignore)",
+		string.format("phase=%s, winner=%s", phase, tostring(winner)),
 		ok
 	)
 end)

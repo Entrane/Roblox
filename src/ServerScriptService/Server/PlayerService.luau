@@ -240,8 +240,8 @@ end
 -- ───────────────────────────────────────────────────────────────────────
 
 -- Front montant uniquement : on prévient RoundService une seule fois quand plus
--- aucun joueur n'est Alive. (RoundManager.onAllPlayersDowned est de toute façon
--- gardé Playing ; areAllIncapacitated est false tant qu'un joueur est Alive.)
+-- aucun joueur n'est Alive. (En aval, onRoundResolved est de toute façon gardé
+-- Playing ; areAllIncapacitated est false tant qu'un joueur est Alive.)
 local function resolveDefeatCondition()
 	local allDown = playerState:areAllIncapacitated()
 	if allDown and not lastAllIncapacitated then

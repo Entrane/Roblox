@@ -1,12 +1,21 @@
 --!strict
 -- RoundManager — Machine à états de la manche : colonne vertébrale temporelle.
--- États : Lobby → Starting → Playing → (Victory | Defeat) → Lobby → ...
+-- États : Lobby → Starting → Playing → Resolved → Lobby → ...
+--
+-- ─── ROLE-IGNORANT (refonte PvP) ────────────────────────────────────────
+-- RoundManager ne DÉCIDE PLUS qui gagne. Il ne CONSTRUIT JAMAIS une valeur
+-- Faction : il ne fait que la RECEVOIR via onRoundResolved(winner) et la stocker.
+-- C'est le SERVICE qui calcule le vainqueur à partir des conditions du monde
+-- (échappées, survivants tous résolus, timer écoulé) et le transmet. Le module
+-- ne sait même pas que « le timeout favorise l'Écho » — il sait juste compter le
+-- temps et exposer timeRemaining ; c'est le Service qui, voyant le temps écoulé,
+-- appelle onRoundResolved(Echo). Forme la plus stricte d'ignorance des rôles.
 --
 -- ─── PURETÉ & PASSIVITÉ ─────────────────────────────────────────────────
 -- Ce module DÉCIDE des transitions ; il ne VA RIEN CHERCHER dans le monde.
--- Tous les événements dynamiques (joueur qui rejoint/quitte, objectif atteint,
--- tous les joueurs à terre) ENTRENT par appel de fonction. Aucune dépendance à
--- Players, Workspace, RunService, aux Remotes ni à un objet 3D.
+-- Tous les événements dynamiques (joueur qui rejoint/quitte, manche résolue)
+-- ENTRENT par appel de fonction. Aucune dépendance à Players, Workspace,
+-- RunService, aux Remotes ni à un objet 3D.
 --
 -- Le module est PASSIF : il ne notifie personne. Détecter un changement de phase
 -- est la RESPONSABILITÉ DE L'APPELANT (le Service), par comparaison à chaque tick :
@@ -29,10 +38,9 @@
 --
 -- CHOIX ASSUMÉ — require plutôt qu'injection (uniforme sur tous les modules
 -- Logic) : GameConfig et Types sont des CONSTANTES/TYPES figés, pas des
--- dépendances comportementales. Les charger est une entorse mineure, pas le
--- couplage que la règle de pureté visait à interdire. Les require sont
--- volontairement ISOLÉS dans l'unique bloc ci-dessous : un futur passage à
--- l'injection (new(deps)) resterait une modif chirurgicale, localisée ici.
+-- dépendances comportementales. Les require sont volontairement ISOLÉS dans
+-- l'unique bloc ci-dessous : un futur passage à l'injection (new(deps)) resterait
+-- une modif chirurgicale, localisée ici.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage.Shared
@@ -43,14 +51,15 @@ local RoundManager = {}
 RoundManager.__index = RoundManager
 
 -- État interne + méthodes (via metatable). Pattern strict recommandé.
+-- `winner` : faction gagnante POSÉE par onRoundResolved (en Playing) et appliquée
+-- en phase Resolved par update. Remis à nil dès qu'on (re)part en Lobby/Playing.
 export type RoundManager = typeof(setmetatable(
 	{} :: {
 		phase: Types.RoundPhase,
 		timeRemaining: number, -- secondes restantes dans la phase courante
 		players: { [number]: boolean }, -- ensemble des userId présents et suivis
 		playerCount: number, -- nombre de joueurs présents (suivis)
-		objectiveComplete: boolean, -- intention : sortie atteinte (résolue en Playing)
-		allDowned: boolean, -- intention : tous les actifs à terre (résolue en Playing)
+		winner: Types.Faction?, -- vainqueur reçu du Service, ou nil tant que non résolu
 	},
 	RoundManager
 ))
@@ -67,8 +76,7 @@ function RoundManager.new(): RoundManager
 	self.timeRemaining = GameConfig.Round.LobbyDuration
 	self.players = {}
 	self.playerCount = 0
-	self.objectiveComplete = false
-	self.allDowned = false
+	self.winner = nil
 	return self
 end
 
@@ -80,8 +88,7 @@ end
 function RoundManager._enterLobby(self: RoundManager)
 	self.phase = Types.RoundPhase.Lobby
 	self.timeRemaining = GameConfig.Round.LobbyDuration
-	self.objectiveComplete = false
-	self.allDowned = false
+	self.winner = nil
 	-- NB : on CONSERVE `players` — les joueurs encore présents serviront à
 	-- recompter pour la manche suivante (T1 redéclenchera au prochain update).
 end
@@ -94,18 +101,14 @@ end
 function RoundManager._enterPlaying(self: RoundManager)
 	self.phase = Types.RoundPhase.Playing
 	self.timeRemaining = GameConfig.Round.MaxRoundDuration -- garde-fou de durée
-	-- Repart d'intentions vierges pour la nouvelle manche.
-	self.objectiveComplete = false
-	self.allDowned = false
+	self.winner = nil -- repart d'une manche non résolue
 end
 
-function RoundManager._enterVictory(self: RoundManager)
-	self.phase = Types.RoundPhase.Victory
-	self.timeRemaining = GameConfig.Round.IntermissionDuration
-end
-
-function RoundManager._enterDefeat(self: RoundManager)
-	self.phase = Types.RoundPhase.Defeat
+-- État TERMINAL unique (ex-Victory/Defeat). `winner` est DÉJÀ posé par
+-- onRoundResolved au moment où update déclenche cette entrée ; on ne fait que
+-- caler le timer d'intermission. La faction décide de l'écran de fin, pas la phase.
+function RoundManager._enterResolved(self: RoundManager)
+	self.phase = Types.RoundPhase.Resolved
 	self.timeRemaining = GameConfig.Round.IntermissionDuration
 end
 
@@ -134,7 +137,7 @@ function RoundManager.onPlayerJoined(self: RoundManager, userId: number): boolea
 end
 
 -- Un joueur quitte. Retire son suivi. Inconnu (jamais suivi ou déjà parti) → ignoré.
--- Les transitions éventuelles (T2 annulation, T7 abandon) sont résolues par update.
+-- Les transitions éventuelles (T2 annulation, T5 abandon) sont résolues par update.
 function RoundManager.onPlayerLeft(self: RoundManager, userId: number)
 	if type(userId) ~= "number" then
 		return
@@ -149,23 +152,30 @@ function RoundManager.onPlayerLeft(self: RoundManager, userId: number)
 	end
 end
 
--- Signale que l'objectif est atteint (sortie atteinte, courant rétabli).
--- N'a d'effet qu'en Playing (sinon gardé/ignoré). Idempotent.
--- NB : ce n'est PAS « 5 fusibles déposés » (ça, c'est un jalon de FuseSystem),
--- mais bien « sortie atteinte ». La transition réelle s'applique dans update().
-function RoundManager.onObjectiveComplete(self: RoundManager)
-	if self.phase == Types.RoundPhase.Playing then
-		self.objectiveComplete = true
+-- Le SERVICE signale que la manche est résolue et QUI a gagné. RoundManager ne
+-- calcule rien : il enregistre la faction et laisse update appliquer la transition
+-- Playing → Resolved (discipline « update est le seul point de transition »).
+--
+-- Gardes :
+--   - N'a d'effet qu'en Playing (une résolution n'a de sens que manche en cours) ;
+--   - winner doit être une Faction valide (sinon ignoré, défensif) ;
+--   - IDEMPOTENT « premier arrivé gagne » : si un vainqueur est déjà posé, les
+--     appels suivants sont ignorés. C'est CE garde qui fait gagner la victoire
+--     survivant contre le timeout quand les deux tombent le même tick : le Service
+--     teste la victoire AVANT le timeout et appelle onRoundResolved(Survivors) en
+--     premier ; un éventuel onRoundResolved(Echo) du watcher timeout est alors
+--     ignoré ici.
+function RoundManager.onRoundResolved(self: RoundManager, winner: Types.Faction)
+	if self.phase ~= Types.RoundPhase.Playing then
+		return
 	end
-end
-
--- Signale que tous les participants actifs sont à terre/morts.
--- C'est PlayerService qui DÉTECTE la condition et l'appelle (RoundManager ne la
--- calcule pas). N'a d'effet qu'en Playing. Idempotent.
-function RoundManager.onAllPlayersDowned(self: RoundManager)
-	if self.phase == Types.RoundPhase.Playing then
-		self.allDowned = true
+	if winner ~= Types.Faction.Survivors and winner ~= Types.Faction.Echo then
+		return -- faction inconnue : on n'enregistre rien
 	end
+	if self.winner ~= nil then
+		return -- premier vainqueur verrouillé
+	end
+	self.winner = winner
 end
 
 -- ───────────────────────────────────────────────────────────────────────
@@ -177,7 +187,7 @@ end
 function RoundManager.update(self: RoundManager, dt: number)
 	-- Défensif : dt invalide (nil, non-nombre, NaN, ≤ 0) → traité comme 0. On
 	-- n'avance pas les timers, mais on évalue quand même les transitions
-	-- conditionnelles (T1/T2/T7), qui ne dépendent pas du temps.
+	-- conditionnelles (T1/T2/T4/T5), qui ne dépendent pas du temps.
 	local delta: number = if type(dt) == "number" and dt > 0 then dt else 0
 
 	local phase = self.phase
@@ -202,25 +212,27 @@ function RoundManager.update(self: RoundManager, dt: number)
 		end
 
 	elseif phase == Types.RoundPhase.Playing then
-		-- T7 : plus aucun joueur → abandon direct vers Lobby (aucun écran).
+		-- T5 : plus aucun joueur → abandon direct vers Lobby (aucun écran, on
+		-- JETTE tout vainqueur éventuel : serveur vide, personne à qui l'afficher).
 		if self.playerCount <= 0 then
 			self:_enterLobby()
-		-- T4 : la victoire GAGNE LA COURSE — vérifiée AVANT le timeout.
-		elseif self.objectiveComplete then
-			self:_enterVictory()
-		-- T5 : tous les actifs à terre.
-		elseif self.allDowned then
-			self:_enterDefeat()
+		-- T4 : la manche est résolue (winner posé par le Service via onRoundResolved).
+		-- Vérifié AVANT le timer : une résolution gagne toujours la course au temps.
+		elseif self.winner ~= nil then
+			self:_enterResolved()
 		else
-			-- T6 : garde-fou de durée maximale.
+			-- Décompte du garde-fou de durée. PLUS d'auto-résolution ici : à
+			-- expiration, on RESTE en Playing (timer clampé). C'est le Service qui,
+			-- voyant timeRemaining ≤ 0, appellera onRoundResolved(Echo). Le module
+			-- reste role-ignorant (il ne nomme aucune faction).
 			self.timeRemaining -= delta
-			if self.timeRemaining <= 0 then
-				self:_enterDefeat()
+			if self.timeRemaining < 0 then
+				self.timeRemaining = 0
 			end
 		end
 
-	elseif phase == Types.RoundPhase.Victory or phase == Types.RoundPhase.Defeat then
-		-- T8 / T9 : fin de l'intermission → retour au Lobby.
+	elseif phase == Types.RoundPhase.Resolved then
+		-- T6 : fin de l'intermission → retour au Lobby.
 		self.timeRemaining -= delta
 		if self.timeRemaining <= 0 then
 			self:_enterLobby()
@@ -232,11 +244,15 @@ end
 -- Lecture (pure, sans effet de bord) — l'appelant lit et compare lui-même
 -- ───────────────────────────────────────────────────────────────────────
 
--- Snapshot destiné à être répliqué aux clients (HUD : phase + temps restant).
+-- Snapshot destiné à être répliqué aux clients (HUD : phase + temps + vainqueur).
+-- INVARIANT exposé : winner non-nil SI ET SEULEMENT SI phase == Resolved. On
+-- masque ici tout vainqueur transitoire posé pendant un même tick Playing (entre
+-- onRoundResolved et l'application de la transition par update).
 function RoundManager.getState(self: RoundManager): Types.RoundState
 	return {
 		phase = self.phase,
 		timeRemaining = math.max(self.timeRemaining, 0), -- jamais négatif à l'affichage
+		winner = if self.phase == Types.RoundPhase.Resolved then self.winner else nil,
 	}
 end
 

@@ -63,15 +63,17 @@ Types.Role = table.freeze({
 
 -- Phases de la machine à états de manche.
 -- Starting = décompte avant le lancement (annulable si on repasse sous MinPlayers).
-export type RoundPhase = "Lobby" | "Starting" | "Playing" | "Victory" | "Defeat"
+-- Resolved = ÉTAT TERMINAL UNIQUE (ex-Victory/Defeat fusionnés) : la manche est
+-- finie, le vainqueur est porté par RoundState.winner. Un seul écran de fin,
+-- paramétré par la faction, au lieu de deux phases distinctes.
+export type RoundPhase = "Lobby" | "Starting" | "Playing" | "Resolved"
 
 -- ⚠️ DOIT rester synchronisé avec le type `RoundPhase` ci-dessus.
 Types.RoundPhase = table.freeze({
 	Lobby = "Lobby" :: "Lobby",
 	Starting = "Starting" :: "Starting",
 	Playing = "Playing" :: "Playing",
-	Victory = "Victory" :: "Victory",
-	Defeat = "Defeat" :: "Defeat",
+	Resolved = "Resolved" :: "Resolved",
 })
 
 -- Faction gagnante d'une manche PvP (argument de l'éventuel onRoundResolved).
@@ -88,13 +90,12 @@ Types.Faction = table.freeze({
 })
 
 -- État logique de la manche en cours.
--- `winner` reste nil hors fin de manche. Champ OPTIONNEL : la collapse
--- Victory/Defeat -> état terminal neutre qui le remplit viendra avec la refonte
--- de RoundManager (étape ultérieure) ; ajouté ici sans casser getState() actuel.
+-- INVARIANT garanti par RoundManager.getState() : `winner` est non-nil SI ET
+-- SEULEMENT SI `phase == Resolved`. Hors état terminal, il vaut toujours nil.
 export type RoundState = {
 	phase: RoundPhase, -- phase courante
 	timeRemaining: number, -- secondes restantes dans la phase courante
-	winner: Faction?, -- faction gagnante, ou nil tant que la manche n'est pas résolue
+	winner: Faction?, -- faction gagnante en phase Resolved, nil sinon
 }
 
 -- ═══════════════════════════════════════════════════════════════════════
