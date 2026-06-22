@@ -9,20 +9,18 @@
 -- update(), jamais de callback. C'est le SEUL endroit du projet qui fait
 -- cette comparaison.
 --
--- ─── RoundManager EST ROLE-IGNORANT : le winner se calcule ICI ──────────
--- Depuis la refonte PvP, RoundManager ne décide plus qui gagne : il reçoit la
--- faction via onRoundResolved(winner) et applique Playing → Resolved. C'est donc
--- au Service de NOMMER la faction. Deux sources de résolution sont câblées dans
--- ce module :
---   1. le WATCHER TIMEOUT (resolveTimeout, dans tick) : le garde-fou de durée
---      écoulé FAVORISE L'ÉCHO → onRoundResolved(Echo) ;
---   2. les déclencheurs Service stables (signalObjectiveComplete/
---      signalAllPlayersDowned) que d'AUTRES Services (FuseService, PlayerService)
---      appellent sans connaître l'API exacte de RoundManager.
+-- ─── RoundManager ET RoundService SONT ROLE-IGNORANTS ───────────────────
+-- RoundManager ne décide plus qui gagne : il reçoit la faction via
+-- onRoundResolved(winner) et applique Playing → Resolved. RoundService NE NOMME
+-- PLUS AUCUNE FACTION non plus : il n'expose qu'un point d'entrée neutre,
+-- signalRoundResolved(winner), relayé tel quel à RoundManager. Le calcul DU
+-- vainqueur (survivants tous résolus / évasion / timeout) est centralisé dans
+-- PlayerService, SEUL calculateur (décision #4) — y compris le timeout, qui y a
+-- été DÉPLACÉ pour que la résolution survivants gagne la course au temps.
 --
 -- ─── AUTONOMIE vis-à-vis de FuseSystem / PlayerState ────────────────────
 -- Ce Service ne require ni FuseSystem ni PlayerState et n'a pas besoin de les
--- connaître : il n'expose que les déclencheurs ci-dessus. Même discipline de
+-- connaître : il n'expose que signalRoundResolved. Même discipline de
 -- découplage que celle tenue entre les modules Logic.
 
 local Players = game:GetService("Players")
@@ -105,25 +103,6 @@ local function onPhaseChanged(previous: Types.RoundPhase, current: Types.RoundPh
 end
 
 -- ───────────────────────────────────────────────────────────────────────
--- Watcher timeout — nomme la faction sur expiration du garde-fou de durée
--- ───────────────────────────────────────────────────────────────────────
-
--- RoundManager ne s'auto-résout PLUS sur timeout (il reste role-ignorant : il
--- compte mais ne nomme aucune faction). Quand le garde-fou de durée est écoulé
--- en Playing, c'est ICI qu'on tranche : le temps écoulé FAVORISE L'ÉCHO.
--- onRoundResolved est Playing-gated et idempotent (premier vainqueur verrouillé) :
--- appeler ce watcher à chaque tick tant que le timer est à 0 est sans danger, et
--- une victoire survivant survenue le même tick (signalée avant) gagne la course.
-local function resolveTimeout()
-	if roundManager:getPhase() ~= Types.RoundPhase.Playing then
-		return
-	end
-	if roundManager:getState().timeRemaining <= 0 then
-		roundManager:onRoundResolved(Types.Faction.Echo)
-	end
-end
-
--- ───────────────────────────────────────────────────────────────────────
 -- Tick serveur — SEUL endroit qui compare phase avant/après update()
 -- ───────────────────────────────────────────────────────────────────────
 
@@ -142,11 +121,6 @@ local function tick(dt: number)
 	if current ~= previous then
 		onPhaseChanged(previous, current)
 	end
-
-	-- Après la détection de phase : nomme la faction si le timer Playing est
-	-- écoulé. Pose le winner ; la transition Playing → Resolved s'appliquera au
-	-- prochain update (discipline « update est le seul point de transition »).
-	resolveTimeout()
 end
 
 -- ───────────────────────────────────────────────────────────────────────
@@ -172,22 +146,11 @@ function RoundService.getRoundManager(): RoundManager.RoundManager
 	return roundManager
 end
 
--- ⚠️ TODO — PLACEHOLDER NON APPELÉ tant que FuseService est un stub. Câblé pour
--- garder un déclencheur Service stable, mais PERSONNE ne l'appelle aujourd'hui.
--- Sémantique provisoire : « objectif collectif atteint » → victoire Survivors.
--- À REMPLACER à l'étape FuseService/EchoService par la vraie règle d'ÉVASION
--- INDIVIDUELLE (un survivant atteint la sortie), qui ne passe pas forcément par
--- ce point d'entrée collectif. NE PAS OUBLIER ce TODO en branchant FuseService.
-function RoundService.signalObjectiveComplete()
-	roundManager:onRoundResolved(Types.Faction.Survivors)
-end
-
--- Appelé par PlayerService (détection « tous les joueurs actifs à terre »).
--- Approximation actuelle (pré-Escaped) : tous incapacités → victoire Écho. La
--- règle précise « tous survivants résolus (Dead OU Escaped), Écho exclu » et la
--- victoire Survivors par évasion viendront avec l'extension PlayerState.
-function RoundService.signalAllPlayersDowned()
-	roundManager:onRoundResolved(Types.Faction.Echo)
+-- Point d'entrée NEUTRE de résolution : RoundService ne nomme aucune faction, il
+-- relaie le vainqueur calculé par PlayerService (décision #4). RoundManager
+-- applique Playing → Resolved (Playing-gated, idempotent « premier verrouillé »).
+function RoundService.signalRoundResolved(winner: Types.Faction)
+	roundManager:onRoundResolved(winner)
 end
 
 -- Point d'entrée unique. Appelé une seule fois par init.server.luau.

@@ -15,11 +15,14 @@
 -- paramètre qui reste (la cible de réanimation) est une DONNÉE, entièrement
 -- revalidée serveur : état (PlayerState : cible Downed) ET portée monde (tick).
 --
--- ─── COUPLAGE AVEC RoundService (assumé) ────────────────────────────────
--- PlayerService DÉPEND de RoundService. La règle de pureté ne visait que les
--- modules Logic (PlayerState/RoundManager restent purs et ignorants l'un de
--- l'autre) ; les Services sont la couche de câblage et peuvent se requérir. On
--- LIT la phase (reset à l'entrée Playing) et on ÉCRIT via signalAllPlayersDowned().
+-- ─── COUPLAGES SERVICE (assumés) ────────────────────────────────────────
+-- PlayerService DÉPEND de RoundService (LIT la phase ; ÉCRIT le vainqueur via
+-- signalRoundResolved) et d'EchoService (LIT getRoleManager():getEchoUserId()
+-- pour EXCLURE l'Écho du registre survivant). La règle de pureté ne visait que
+-- les modules Logic ; les Services sont la couche de câblage et peuvent se
+-- requérir. EchoService est requis LAZY (cf. onPlayingStarted) pour éviter un
+-- cycle de require (EchoService require déjà PlayerService au chargement).
+-- PlayerService est désormais le SEUL calculateur du vainqueur (décision #4).
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -47,8 +50,9 @@ local lastLife: { [number]: Types.PlayerLifeState } = {}
 -- prix du découplage (RoundManager reste passif, pas de callback partagé).
 local lastPhase: Types.RoundPhase = RoundService.getRoundManager():getPhase()
 
--- Front montant de areAllIncapacitated : on ne prévient RoundService qu'UNE fois.
-local lastAllIncapacitated = false
+-- Front montant de la résolution de fin : on ne signale le vainqueur qu'UNE fois.
+-- Remis à false au démarrage (onPlayingStarted) ET au teardown (onPlayingEnded).
+local lastResolved = false
 
 -- Intentions de réanimation reçues des clients : rescuerUserId -> targetUserId.
 -- Revalidées chaque tick (portée monde) avant d'être transmises à PlayerState.
@@ -212,17 +216,41 @@ end
 -- apparaît au SpawnLocation par défaut (couture à revisiter avec l'entité et le
 -- multijoueur — cas rare aujourd'hui).
 local function onPlayingStarted()
+	-- require LAZY d'EchoService : il require déjà PlayerService au chargement, le
+	-- requérir au top créerait un cycle. Ici (manche qui démarre, bien après
+	-- l'init), EchoService est chargé/caché → require instantané. L'ordre des
+	-- Heartbeat (RoundService → EchoService → PlayerService) garantit qu'EchoService
+	-- a DÉJÀ posé echoUserId via assignRoles sur cette même frame.
+	local EchoService = require(script.Parent.EchoService)
+	local echoId = EchoService.getRoleManager():getEchoUserId() -- nil en mode IA
+
 	for _, player in Players:GetPlayers() do
 		local userId = player.UserId
+		-- Purge TOUJOURS (résidu d'une manche précédente, y compris si ce joueur
+		-- était l'Écho avant et survivant maintenant, ou l'inverse).
 		playerState:removePlayer(userId)
-		playerState:registerPlayer(userId)
-		lastLife[userId] = Types.LifeState.Alive
 		reviveIntents[userId] = nil
-		if not getHumanoid(userId) then
-			player:LoadCharacter()
+		lastLife[userId] = nil
+
+		-- EXCLUSION DE L'ÉCHO : on n'inscrit PAS le joueur Écho (son corps/spawn/
+		-- vitesse sont gérés par EchoService). En mode IA, echoId == nil → aucun
+		-- match → tout le monde est inscrit, comme avant l'arrivée du PvP.
+		if userId ~= echoId then
+			playerState:registerPlayer(userId)
+			lastLife[userId] = Types.LifeState.Alive
+			if not getHumanoid(userId) then
+				player:LoadCharacter()
+			end
 		end
 	end
-	lastAllIncapacitated = false
+	lastResolved = false
+end
+
+-- Sortie de Playing : reset EXPLICITE du front montant de résolution (et non
+-- supposé via le garde de resolveRoundResolution). Garantit un état propre entre
+-- les manches.
+local function onPlayingEnded()
+	lastResolved = false
 end
 
 local function resolvePhase()
@@ -230,24 +258,45 @@ local function resolvePhase()
 	if phase ~= lastPhase then
 		if phase == Types.RoundPhase.Playing then
 			onPlayingStarted()
+		elseif lastPhase == Types.RoundPhase.Playing then
+			onPlayingEnded()
 		end
 		lastPhase = phase
 	end
 end
 
 -- ───────────────────────────────────────────────────────────────────────
--- Condition de défaite collective
+-- Résolution de fin de manche — SEUL calculateur du vainqueur (décision #4)
 -- ───────────────────────────────────────────────────────────────────────
 
--- Front montant uniquement : on prévient RoundService une seule fois quand plus
--- aucun joueur n'est Alive. (En aval, onRoundResolved est de toute façon gardé
--- Playing ; areAllIncapacitated est false tant qu'un joueur est Alive.)
-local function resolveDefeatCondition()
-	local allDown = playerState:areAllIncapacitated()
-	if allDown and not lastAllIncapacitated then
-		RoundService.signalAllPlayersDowned()
+-- PlayerService centralise le calcul du vainqueur (RoundService ne nomme plus
+-- aucune faction). PRIORITÉ : la résolution survivants est testée AVANT le
+-- timeout → la victoire gagne la course au temps (l'idempotence de
+-- onRoundResolved verrouille le premier de toute façon). Le timeout, DÉPLACÉ ici
+-- depuis RoundService, favorise l'Écho (temps écoulé).
+local function resolveRoundResolution()
+	local roundManager = RoundService.getRoundManager()
+	if roundManager:getPhase() ~= Types.RoundPhase.Playing then
+		return -- hors Playing : onPlayingEnded gère le reset de lastResolved
 	end
-	lastAllIncapacitated = allDown
+
+	-- 1) Tous les survivants résolus (Dead OU Escaped) → fin. Front montant pour
+	--    ne signaler qu'une fois ; ≥ 1 évadé → Survivors, sinon (tous Dead) → Echo.
+	if playerState:areAllSurvivorsResolved() then
+		if not lastResolved then
+			local winner = if playerState:hasAnyEscaped()
+				then Types.Faction.Survivors
+				else Types.Faction.Echo
+			RoundService.signalRoundResolved(winner)
+			lastResolved = true
+		end
+		return
+	end
+
+	-- 2) Sinon, garde-fou de durée écoulé → l'Écho l'emporte.
+	if roundManager:getState().timeRemaining <= 0 then
+		RoundService.signalRoundResolved(Types.Faction.Echo)
+	end
 end
 
 -- ───────────────────────────────────────────────────────────────────────
@@ -280,8 +329,8 @@ local function tick(dt: number)
 		end
 	end
 
-	-- 5) Défaite collective (front montant -> RoundService).
-	resolveDefeatCondition()
+	-- 5) Résolution de fin de manche (vainqueur calculé ICI, décision #4).
+	resolveRoundResolution()
 end
 
 -- ───────────────────────────────────────────────────────────────────────

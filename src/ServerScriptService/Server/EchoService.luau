@@ -251,11 +251,9 @@ local function tickHuman(dt: number)
 	end
 
 	-- Vitesse effective (Frenzy reflété automatiquement) appliquée au Humanoid.
-	-- ⚠️ TODO 6c — DOUBLE-PILOTAGE WalkSpeed À FERMER : tant que PlayerState
-	-- n'exclut pas l'Écho de son registre (étape 6c), PlayerService.applyMovement
-	-- écrit AUSSI le WalkSpeed de ce joueur → conflit (dernier écrivain par tick).
-	-- L'exclusion 6c (l'Écho non inscrit dans PlayerState) supprime ce conflit.
-	-- NE PAS OUBLIER de retirer ce TODO une fois 6c en place.
+	-- L'Écho n'étant PAS inscrit dans PlayerState (exclusion 6c, onPlayingStarted),
+	-- PlayerService.applyMovement ne touche jamais son WalkSpeed : EchoService en est
+	-- le seul pilote, plus de double-pilotage.
 	local humanoid = getHumanoid(uid)
 	if humanoid then
 		humanoid.WalkSpeed = controller:getMoveSpeed()

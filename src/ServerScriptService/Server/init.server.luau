@@ -5,8 +5,8 @@
 --   2. EchoService — possède le RoleManager et l'expose ; doit s'initialiser
 --      AVANT PlayerService, qui (6c) lira EchoService.getRoleManager() pour
 --      exclure l'Écho du registre survivant.
---   3. PlayerService — LIT la phase de RoundService et ÉCRIT via
---      signalAllPlayersDowned().
+--   3. PlayerService — LIT la phase de RoundService et d'EchoService
+--      (getRoleManager) ; calcule le vainqueur et ÉCRIT via signalRoundResolved().
 -- (FuseService viendra ensuite.)
 
 local RoundService = require(script.RoundService)
