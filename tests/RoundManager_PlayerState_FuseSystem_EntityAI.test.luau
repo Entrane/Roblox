@@ -12,6 +12,7 @@ local PlayerState = require(ServerStorage.Logic.PlayerState)
 local FuseSystem = require(ServerStorage.Logic.FuseSystem)
 local EntityAI = require(ServerStorage.Logic.EntityAI)
 local RoleManager = require(ServerStorage.Logic.RoleManager)
+local EchoController = require(ServerStorage.Logic.EchoController)
 
 local passCount = 0
 local failCount = 0
@@ -918,6 +919,158 @@ scenario("38. PlayerState course Alive/attaque - fuite d'abord gagne ; attaque d
 		"fuite d'abord=Escaped ; attaque d'abord=Downed",
 		string.format("ordre1=%s ; ordre2=%s", s1 and s1.lifeState or "nil", s2 and s2.lifeState or "nil"),
 		ok
+	)
+end)
+
+-- ============================================================
+-- EchoController -- capacités Écho (écholocation pulsée + Howl + Frenzy)
+-- ============================================================
+
+local ECHO = GameConfig.Echo
+
+-- Construit une EntityObservation minimale pour l'écholocation (position fournie
+-- par défaut, comme la politique de remplissage du Service dans la portée).
+local function mkEchoObs(userId: number, distance: number, lifeState: Types.PlayerLifeState, position: Vector3?): Types.EntityObservation
+	return {
+		userId = userId,
+		distance = distance,
+		visible = false, -- l'écholocation ne dépend PAS de la vue (sonar)
+		audible = false,
+		lifeState = lifeState,
+		position = position or Vector3.new(distance, 0, 0),
+	}
+end
+
+scenario("39. EchoController requestAbility - Howl active (effet+cooldown), re-trigger pendant actif rejete, id invalide ignore", function(rep)
+	local echo = EchoController.new()
+	echo:requestAbility(Types.AbilityId.Howl)
+	local s1 = echo:getState()
+
+	-- Re-trigger immediat : cooldown > 0 -> rejete, aucun reset des timers.
+	echo:requestAbility(Types.AbilityId.Howl)
+	local s2 = echo:getState()
+
+	-- Id invalide : aucun effet (ni Howl ni Frenzy ne bougent).
+	echo:requestAbility("Bidon" :: any)
+	local s3 = echo:getState()
+
+	local ok = s1.howl.activeRemaining == ECHO.Howl.RevealDuration and s1.howl.cooldownRemaining == ECHO.Howl.Cooldown
+		and s2.howl.activeRemaining == ECHO.Howl.RevealDuration and s2.howl.cooldownRemaining == ECHO.Howl.Cooldown
+		and s3.frenzy.activeRemaining == 0 and s3.frenzy.cooldownRemaining == 0
+	rep(
+		string.format("Howl active=%d/cd=%d, re-trigger inchange, id invalide sans effet", ECHO.Howl.RevealDuration, ECHO.Howl.Cooldown),
+		string.format("s1(act=%s,cd=%s) s2(act=%s,cd=%s) frenzy(act=%s,cd=%s)",
+			tostring(s1.howl.activeRemaining), tostring(s1.howl.cooldownRemaining),
+			tostring(s2.howl.activeRemaining), tostring(s2.howl.cooldownRemaining),
+			tostring(s3.frenzy.activeRemaining), tostring(s3.frenzy.cooldownRemaining)),
+		ok
+	)
+end)
+
+scenario("40. EchoController - Howl et Frenzy independantes, coexistent (vitesse boostee + revelation totale)", function(rep)
+	local echo = EchoController.new()
+	echo:requestAbility(Types.AbilityId.Frenzy)
+	echo:requestAbility(Types.AbilityId.Howl) -- pendant que Frenzy est active
+
+	local s = echo:getState()
+	local bothActive = s.frenzy.activeRemaining > 0 and s.howl.activeRemaining > 0
+	local speed = echo:getMoveSpeed() -- Frenzy actif -> boostee
+
+	-- Howl actif -> un survivant HORS portee est quand meme pingue (revelation totale).
+	local farObs = { mkEchoObs(1, ECHO.EcholocationRange + 100, Types.LifeState.Alive) }
+	local pings = echo:update(ECHO.EcholocationInterval, farObs) -- 1er pulse
+
+	local ok = bothActive
+		and math.abs(speed - ECHO.MoveSpeed * ECHO.Frenzy.SpeedMultiplier) < 1e-6
+		and pings ~= nil and #pings == 1 and pings[1].userId == 1
+	rep(
+		string.format("les deux actives, speed=%.1f, survivant hors portee pingue (Howl)", ECHO.MoveSpeed * ECHO.Frenzy.SpeedMultiplier),
+		string.format("bothActive=%s speed=%s pings=%s", tostring(bothActive), tostring(speed), pings and tostring(#pings) or "nil"),
+		ok
+	)
+end)
+
+scenario("41. EchoController ecolocation pulsee - rien avant l'intervalle, emission au pulse, filtres portee/etat/position", function(rep)
+	local echo = EchoController.new()
+
+	local obs = {
+		mkEchoObs(1, 10, Types.LifeState.Alive), -- proche, vivant -> pingue
+		mkEchoObs(2, ECHO.EcholocationRange + 50, Types.LifeState.Alive), -- hors portee -> NON
+		mkEchoObs(3, 5, Types.LifeState.Downed), -- proche, a terre -> pingue
+		mkEchoObs(4, 5, Types.LifeState.Dead), -- proche mais Dead -> NON
+		mkEchoObs(5, 5, Types.LifeState.Escaped), -- proche mais Escaped -> NON
+		{ userId = 6, distance = 5, visible = false, audible = false, lifeState = Types.LifeState.Alive, position = nil }, -- position nil -> skip defensif
+	}
+
+	-- Avant l'intervalle : pas d'emission.
+	local before = echo:update(ECHO.EcholocationInterval - 0.1, obs)
+	-- Cumul atteint l'intervalle : emission.
+	local atPulse = echo:update(0.1, obs)
+
+	local ids = {}
+	if atPulse then
+		for _, p in atPulse do ids[p.userId] = true end
+	end
+	local ok = before == nil
+		and atPulse ~= nil and #atPulse == 2 and ids[1] and ids[3]
+		and not ids[2] and not ids[4] and not ids[5] and not ids[6]
+	rep(
+		"avant intervalle=nil ; au pulse: {1,3} seulement (2 hors portee, 4 Dead, 5 Escaped, 6 sans position)",
+		string.format("before=%s ; pulse count=%s ids={1=%s,2=%s,3=%s,4=%s,5=%s,6=%s}",
+			tostring(before), atPulse and tostring(#atPulse) or "nil",
+			tostring(ids[1]), tostring(ids[2]), tostring(ids[3]), tostring(ids[4]), tostring(ids[5]), tostring(ids[6])),
+		ok
+	)
+end)
+
+scenario("42. EchoController - effets expirent puis re-declenchables ; vitesse revient a la base", function(rep)
+	local echo = EchoController.new()
+	echo:requestAbility(Types.AbilityId.Frenzy)
+	local speedDuring = echo:getMoveSpeed() -- boostee
+
+	-- Laisse l'effet Frenzy expirer (Duration) sans atteindre le cooldown complet.
+	echo:update(ECHO.Frenzy.Duration + 0.01, {})
+	local sAfterEffect = echo:getState()
+	local speedAfter = echo:getMoveSpeed() -- retour base
+
+	-- Re-trigger pendant que le cooldown court encore -> rejete.
+	echo:requestAbility(Types.AbilityId.Frenzy)
+	local sStillCd = echo:getState()
+
+	-- Laisse le reste du cooldown s'ecouler -> re-declenchable.
+	echo:update(ECHO.Frenzy.Cooldown, {})
+	echo:requestAbility(Types.AbilityId.Frenzy)
+	local sReArmed = echo:getState()
+
+	local ok = math.abs(speedDuring - ECHO.MoveSpeed * ECHO.Frenzy.SpeedMultiplier) < 1e-6
+		and sAfterEffect.frenzy.activeRemaining == 0 and sAfterEffect.frenzy.cooldownRemaining > 0
+		and math.abs(speedAfter - ECHO.MoveSpeed) < 1e-6
+		and sStillCd.frenzy.activeRemaining == 0 -- re-trigger pendant cooldown a echoue
+		and sReArmed.frenzy.activeRemaining == ECHO.Frenzy.Duration -- re-declenche apres cooldown
+	rep(
+		"boostee pendant, base apres expiration, re-trigger en cooldown rejete, re-declenchable apres cooldown",
+		string.format("during=%s after=%s actAfter=%s cdAfter=%s stillCdAct=%s reArmedAct=%s",
+			tostring(speedDuring), tostring(speedAfter), tostring(sAfterEffect.frenzy.activeRemaining),
+			tostring(sAfterEffect.frenzy.cooldownRemaining), tostring(sStillCd.frenzy.activeRemaining),
+			tostring(sReArmed.frenzy.activeRemaining)),
+		ok
+	)
+end)
+
+scenario("43. EchoController defensif - update(dt invalide / observations nil) ne plante pas", function(rep)
+	local echo = EchoController.new()
+	local r1, r2, r3
+	local ok = pcall(function()
+		r1 = echo:update(-1, {}) -- dt invalide -> traite comme 0, pas de pulse
+		r2 = echo:update(ECHO.EcholocationInterval, nil :: any) -- observations nil -> liste vide
+		r3 = echo:getMoveSpeed()
+	end)
+	-- r2 doit etre une liste vide (pulse atteint mais aucune observation).
+	local ok2 = ok and r1 == nil and type(r2) == "table" and #r2 == 0 and r3 == ECHO.MoveSpeed
+	rep(
+		"aucun crash ; dt invalide=nil, obs nil=liste vide, vitesse de base",
+		string.format("pcall=%s r1=%s r2=%s r3=%s", tostring(ok), tostring(r1), r2 and ("#"..tostring(#r2)) or tostring(r2), tostring(r3)),
+		ok2
 	)
 end)
 
