@@ -432,6 +432,14 @@ function PlayerService.recharge(userId: number)
 	playerState:recharge(userId)
 end
 
+-- Écriture ciblée : FuseService déclenche l'évasion d'un survivant atteignant la
+-- sortie. markEscaped est gardé Alive côté PlayerState (Downed/Dead/Escaped →
+-- no-op). C'est le maillon qui alimente resolveRoundResolution (areAllSurvivorsResolved
+-- / hasAnyEscaped → victoire Survivors).
+function PlayerService.markEscaped(userId: number)
+	playerState:markEscaped(userId)
+end
+
 -- Point d'entrée unique. Appelé une seule fois par init.server.luau, APRÈS
 -- RoundService.init() (on lit sa phase et on l'appelle).
 function PlayerService.init()
