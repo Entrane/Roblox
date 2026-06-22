@@ -184,17 +184,72 @@ GameConfig.Round = {
 	IntermissionDuration = 8, -- s — écran de fin (victoire/défaite) avant retour lobby
 
 	-- Garde-fou : si rien n'aboutit, la manche se termine. ⚠️ PARI.
+	-- En PvP, l'expiration FAVORISE L'ÉCHO (tout survivant non échappé est perdu) —
+	-- inversion de la sémantique PvE, appliquée à la refonte de RoundManager.
 	MaxRoundDuration = 600, -- s (10 min)
 }
 
--- Table gelée pour éviter toute modification accidentelle à l'exécution.
--- NB : table.freeze est SUPERFICIEL (shallow). On gèle donc aussi chaque
--- sous-table ci-dessous pour protéger réellement toutes les valeurs.
-for _, category in pairs(GameConfig) do
-	if type(category) == "table" then
-		table.freeze(category)
+-- ───────────────────────────────────────────────────────────────────────
+-- Roles — assignation des rôles et bascule de mode (PvP 4v1)
+-- ───────────────────────────────────────────────────────────────────────
+GameConfig.Roles = {
+	-- Seuil de bascule, évalué AU DÉMARRAGE de manche uniquement (décision #7) :
+	-- >= ce nombre de joueurs → un humain incarne l'Écho ; en-dessous → Écho IA.
+	HumanEchoMinPlayers = 3,
+
+	-- Toujours un seul Écho par manche.
+	EchoCount = 1,
+}
+
+-- ───────────────────────────────────────────────────────────────────────
+-- Echo — capacités PARTAGÉES (humain ou IA) + écholocation + déplacement humain
+-- ───────────────────────────────────────────────────────────────────────
+-- À ne PAS confondre avec le bloc Entity ci-dessus : Entity = réglages de
+-- NAVIGATION/perception de l'Écho IA (patrouille, poursuite) ; Echo = capacités
+-- et déplacement communs, pilotés par EchoController quelle que soit la source
+-- d'input (décision #1).
+GameConfig.Echo = {
+	-- Déplacement de l'Écho humain : un poil au-dessus du sprint survivant (20)
+	-- → la fuite pure ne suffit pas (cohérent avec l'INTENTION DE DESIGN). ⚠️ GROS PARI.
+	MoveSpeed = 22, -- studs/s
+
+	-- Écholocation PERMANENTE mais COURTE : révèle le proche, pas le plateau.
+	-- Volontairement bien plus courte que la portée pour préserver l'intérêt du
+	-- layout multi-axes (éviter « l'Écho voit tout, tout le temps »). Premier pari
+	-- dans la fourchette 40-60, à recaler sur l'échelle réelle de la map. ⚠️ PARI.
+	EcholocationRange = 50, -- studs
+
+	-- Fréquence de rafraîchissement du flux serveur→client Écho (pulsé pour la
+	-- perf mobile, perçu comme permanent). ⚠️ PARI.
+	EcholocationInterval = 0.5, -- s
+
+	-- Hurlement : pic de révélation renforcée, à cooldown. EFFET PRÉCIS figé à
+	-- l'étape EchoController ; ici, valeurs réglables seulement. ⚠️ PARI.
+	Howl = {
+		Cooldown = 25, -- s
+		RevealDuration = 3, -- s — durée de la révélation renforcée
+	},
+
+	-- Frénésie : bouffée de vitesse temporaire, à cooldown. ⚠️ PARI.
+	Frenzy = {
+		Cooldown = 30, -- s
+		Duration = 5, -- s
+		SpeedMultiplier = 1.4, -- × MoveSpeed pendant Duration
+	},
+}
+
+-- Gel RÉCURSIF pour éviter toute modification accidentelle à l'exécution.
+-- table.freeze est SUPERFICIEL (shallow) : on descend donc dans les sous-tables
+-- imbriquées (ex. Echo.Howl, Echo.Frenzy) pour protéger réellement chaque valeur.
+local function deepFreeze(t: { [any]: any })
+	for _, value in pairs(t) do
+		if type(value) == "table" and not table.isfrozen(value) then
+			deepFreeze(value)
+		end
 	end
+	return table.freeze(t)
 end
-table.freeze(GameConfig)
+
+deepFreeze(GameConfig)
 
 return GameConfig

@@ -19,13 +19,17 @@ local Types = {}
 -- ═══════════════════════════════════════════════════════════════════════
 
 -- États de vie possibles d'un joueur.
-export type PlayerLifeState = "Alive" | "Downed" | "Dead"
+-- Escaped = survivant qui s'est échappé (issue PvP individuelle), terminal pour
+-- la manche au même titre que Dead : exclu du ciblage de l'entité et compté comme
+-- « résolu » (ni à secourir, ni à craindre).
+export type PlayerLifeState = "Alive" | "Downed" | "Dead" | "Escaped"
 
 -- ⚠️ DOIT rester synchronisé avec le type `PlayerLifeState` ci-dessus.
 Types.LifeState = table.freeze({
 	Alive = "Alive" :: "Alive",
 	Downed = "Downed" :: "Downed",
 	Dead = "Dead" :: "Dead",
+	Escaped = "Escaped" :: "Escaped",
 })
 
 -- État logique complet d'un joueur (aucune donnée 3D ici).
@@ -38,6 +42,20 @@ export type PlayerState = {
 	torchOn: boolean, -- torche allumée (consomme la batterie ; le client l'affiche)
 	reviveProgress: number, -- progression de réanimation 0 .. GameConfig.Revive.Duration
 }
+
+-- ═══════════════════════════════════════════════════════════════════════
+-- RÔLES (PvP 4v1)
+-- ═══════════════════════════════════════════════════════════════════════
+
+-- Rôle d'un joueur dans la manche. Un seul Echo ; les autres sont Survivor.
+-- En mode 1-2 joueurs, l'Echo est piloté par l'IA (aucun joueur n'a ce rôle).
+export type Role = "Survivor" | "Echo"
+
+-- ⚠️ DOIT rester synchronisé avec le type `Role` ci-dessus.
+Types.Role = table.freeze({
+	Survivor = "Survivor" :: "Survivor",
+	Echo = "Echo" :: "Echo",
+})
 
 -- ═══════════════════════════════════════════════════════════════════════
 -- MANCHE
@@ -56,10 +74,27 @@ Types.RoundPhase = table.freeze({
 	Defeat = "Defeat" :: "Defeat",
 })
 
+-- Faction gagnante d'une manche PvP (argument de l'éventuel onRoundResolved).
+-- RoundManager reste IGNORANT des rôles : c'est le Service qui calcule le
+-- vainqueur et le lui transmet (décision actée). « Survivors » = au moins un
+-- échappé selon la règle de fin ; « Echo » = tous résolus sans victoire survivant,
+-- ou timer écoulé.
+export type Faction = "Survivors" | "Echo"
+
+-- ⚠️ DOIT rester synchronisé avec le type `Faction` ci-dessus.
+Types.Faction = table.freeze({
+	Survivors = "Survivors" :: "Survivors",
+	Echo = "Echo" :: "Echo",
+})
+
 -- État logique de la manche en cours.
+-- `winner` reste nil hors fin de manche. Champ OPTIONNEL : la collapse
+-- Victory/Defeat -> état terminal neutre qui le remplit viendra avec la refonte
+-- de RoundManager (étape ultérieure) ; ajouté ici sans casser getState() actuel.
 export type RoundState = {
 	phase: RoundPhase, -- phase courante
 	timeRemaining: number, -- secondes restantes dans la phase courante
+	winner: Faction?, -- faction gagnante, ou nil tant que la manche n'est pas résolue
 }
 
 -- ═══════════════════════════════════════════════════════════════════════
@@ -127,6 +162,50 @@ export type EntityObservation = {
 	audible: boolean, -- Service a résolu HearRange + bruit (sprint, via PlayerState)
 	lifeState: PlayerLifeState, -- Alive / Downed / Dead, lu par le Service dans PlayerState
 	position: Vector3?, -- position actuelle, fournie seulement si visible ou audible
+}
+
+-- ═══════════════════════════════════════════════════════════════════════
+-- ÉCHO (capacités partagées humain/IA + écholocation)
+-- ═══════════════════════════════════════════════════════════════════════
+
+-- Capacités activables de l'Écho. Sert à ROUTER une demande d'activation vers
+-- la bonne capacité, que la source soit humaine (Remote) ou IA (EchoController
+-- décide) — décision #1 : capacités dans EchoController, source d'input abstraite.
+export type AbilityId = "Howl" | "Frenzy"
+
+-- ⚠️ DOIT rester synchronisé avec le type `AbilityId` ci-dessus.
+Types.AbilityId = table.freeze({
+	Howl = "Howl" :: "Howl",
+	Frenzy = "Frenzy" :: "Frenzy",
+})
+
+-- État d'une capacité : temps avant réutilisation et temps d'effet restant.
+--   cooldownRemaining > 0  → indisponible (en recharge)
+--   activeRemaining   > 0  → effet en cours (ex. frénésie active)
+-- Howl, à effet instantané, n'utilise activeRemaining que pour la durée de
+-- révélation renforcée ; Frenzy l'utilise pour la durée du bonus de vitesse.
+export type AbilityState = {
+	cooldownRemaining: number,
+	activeRemaining: number,
+}
+
+-- État logique de l'Écho, répliqué au SEUL client Écho (HUD des cooldowns).
+-- Pas d'état d'écholocation ici : elle est recalculée à chaque pulse à partir
+-- des observations, sans persistance (décision #2).
+export type EchoState = {
+	howl: AbilityState,
+	frenzy: AbilityState,
+}
+
+-- Charge MINIMALE d'écholocation envoyée serveur→client Écho : juste qui et où.
+-- ⚠️ CONTRAINTE ANTI-TRICHE NON NÉGOCIABLE (décision #9) : ce type ne doit
+-- JAMAIS être répliqué à un client survivant. Le serveur le calcule à partir du
+-- pipeline EntityObservation (positions déjà résolues) et ne l'émet qu'au joueur
+-- Écho. On n'embarque pas visible/audible/lifeState : le strict nécessaire au
+-- marqueur visuel, rien de plus.
+export type EcholocationPing = {
+	userId: number,
+	position: Vector3,
 }
 
 return Types
