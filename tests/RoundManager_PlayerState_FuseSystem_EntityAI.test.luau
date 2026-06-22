@@ -809,4 +809,116 @@ scenario("34. RoundManager - onRoundResolved idempotent (premier gagne) + factio
 	)
 end)
 
+-- ============================================================
+-- PlayerState -- extension PvP (Escaped + areAllSurvivorsResolved)
+-- ============================================================
+
+scenario("35. PlayerState markEscaped - Alive -> Escaped ; Downed/Dead ignores (garde Alive)", function(rep)
+	local ps = PlayerState.new()
+	ps:registerPlayer(1) -- restera Alive -> Escaped
+	ps:registerPlayer(2) -- sera Downed
+	ps:registerPlayer(3) -- sera Dead
+	ps:applyAttack(2) -- Downed
+	ps:applyAttack(3); ps:applyAttack(3) -- Dead
+
+	ps:markEscaped(1) -- Alive -> Escaped
+	ps:markEscaped(2) -- Downed -> ignore
+	ps:markEscaped(3) -- Dead -> ignore
+
+	local s1 = ps:getState(1)
+	local s2 = ps:getState(2)
+	local s3 = ps:getState(3)
+	local ok = s1 ~= nil and s1.lifeState == Types.LifeState.Escaped
+		and s2 ~= nil and s2.lifeState == Types.LifeState.Downed
+		and s3 ~= nil and s3.lifeState == Types.LifeState.Dead
+	rep(
+		"1=Escaped, 2=Downed (inchange), 3=Dead (inchange)",
+		string.format("1=%s, 2=%s, 3=%s",
+			s1 and s1.lifeState or "nil", s2 and s2.lifeState or "nil", s3 and s3.lifeState or "nil"),
+		ok
+	)
+end)
+
+scenario("36. PlayerState Escaped terminal - applyAttack inerte, setReviving rejete (pas de reanimation d'un evade)", function(rep)
+	local ps = PlayerState.new()
+	ps:registerPlayer(1) -- evade
+	ps:registerPlayer(2) -- sauveteur potentiel (Alive)
+	ps:markEscaped(1) -- Alive -> Escaped
+
+	ps:applyAttack(1) -- terminal -> inerte
+	local afterAttack = ps:getState(1)
+
+	ps:setReviving(1, 2) -- cible non Downed -> rejete par le garde existant
+	local rec = (ps :: any).players[1]
+
+	local ok = afterAttack ~= nil and afterAttack.lifeState == Types.LifeState.Escaped
+		and rec.revivingBy == nil and rec.reviveProgress == 0
+	rep(
+		"reste Escaped apres applyAttack ; revivingBy=nil, reviveProgress=0 (setReviving rejete)",
+		string.format("lifeState=%s ; revivingBy=%s, reviveProgress=%s",
+			afterAttack and afterAttack.lifeState or "nil", tostring(rec.revivingBy), tostring(rec.reviveProgress)),
+		ok
+	)
+end)
+
+scenario("37. PlayerState areAllSurvivorsResolved + hasAnyEscaped - Dead/Escaped seulement, sinon false", function(rep)
+	-- 0 joueur -> false
+	local empty = PlayerState.new()
+	local r0 = empty:areAllSurvivorsResolved()
+
+	-- un Alive -> false
+	local a = PlayerState.new(); a:registerPlayer(1)
+	local rAlive = a:areAllSurvivorsResolved()
+
+	-- un Downed reste -> false (non resolu) ; hasAnyEscaped=false
+	local d = PlayerState.new(); d:registerPlayer(1); d:applyAttack(1)
+	local rDowned = d:areAllSurvivorsResolved()
+	local escDowned = d:hasAnyEscaped()
+
+	-- mix Dead + Escaped -> true ; hasAnyEscaped=true
+	local mix = PlayerState.new()
+	mix:registerPlayer(1); mix:registerPlayer(2)
+	mix:applyAttack(1); mix:applyAttack(1) -- 1 Dead
+	mix:markEscaped(2) -- 2 Escaped
+	local rMix = mix:areAllSurvivorsResolved()
+	local escMix = mix:hasAnyEscaped()
+
+	-- tous Escaped -> true
+	local esc = PlayerState.new()
+	esc:registerPlayer(1); esc:registerPlayer(2)
+	esc:markEscaped(1); esc:markEscaped(2)
+	local rEsc = esc:areAllSurvivorsResolved()
+
+	local ok = r0 == false and rAlive == false and rDowned == false
+		and rMix == true and rEsc == true
+		and escDowned == false and escMix == true
+	rep(
+		"resolved: 0j=false,Alive=false,Downed=false,mix=true,tousEsc=true ; escaped: Downed=false,mix=true",
+		string.format("resolved(0j=%s,Alive=%s,Downed=%s,mix=%s,tousEsc=%s) escaped(Downed=%s,mix=%s)",
+			tostring(r0), tostring(rAlive), tostring(rDowned), tostring(rMix), tostring(rEsc),
+			tostring(escDowned), tostring(escMix)),
+		ok
+	)
+end)
+
+scenario("38. PlayerState course Alive/attaque - fuite d'abord gagne ; attaque d'abord gagne (les deux ordres surs)", function(rep)
+	-- Ordre 1 : markEscaped AVANT applyAttack -> Escaped, attaque inerte
+	local a = PlayerState.new(); a:registerPlayer(1)
+	a:markEscaped(1); a:applyAttack(1)
+	local s1 = a:getState(1)
+
+	-- Ordre 2 : applyAttack AVANT markEscaped -> Downed, fuite rejetee
+	local b = PlayerState.new(); b:registerPlayer(1)
+	b:applyAttack(1); b:markEscaped(1)
+	local s2 = b:getState(1)
+
+	local ok = s1 ~= nil and s1.lifeState == Types.LifeState.Escaped
+		and s2 ~= nil and s2.lifeState == Types.LifeState.Downed
+	rep(
+		"fuite d'abord=Escaped ; attaque d'abord=Downed",
+		string.format("ordre1=%s ; ordre2=%s", s1 and s1.lifeState or "nil", s2 and s2.lifeState or "nil"),
+		ok
+	)
+end)
+
 print(string.format("==================== TEST_Harness : FIN (%d PASS / %d FAIL) ====================", passCount, failCount))

@@ -139,6 +139,36 @@ function PlayerState.applyAttack(self: PlayerState, userId: number)
 	-- Dead : aucun effet.
 end
 
+-- Fuite réussie : Alive → Escaped. CE N'EST PAS UNE MORT mais l'issue de victoire
+-- INDIVIDUELLE du survivant. Le déclencheur vient du SERVICE (détection « joueur
+-- sur le pad de sortie ») ; PlayerState ne calcule aucune position.
+--
+-- GARDÉ Alive UNIQUEMENT : atteindre la sortie suppose de marcher jusqu'à elle ;
+-- un Downed est immobilisé, un Dead/Escaped est terminal. Downed/Dead/Escaped →
+-- ignoré. C'est ce garde qui rend STRUCTURELLEMENT IMPOSSIBLE la course
+-- « Downed qui s'échappe pendant son bleed-out » (un Downed ne peut pas fuir).
+--
+-- Course « Alive atteint la sortie le même tick qu'une attaque » : ici la FUITE
+-- GAGNE si le Service appelle markEscaped AVANT applyAttack (ordre recommandé,
+-- cohérent avec « la victoire gagne la course »). Les deux ordres restent sûrs :
+-- Escaped est terminal donc applyAttack devient inerte ; et si l'attaque passe
+-- d'abord, le joueur est Downed et markEscaped est alors rejeté (non-Alive).
+function PlayerState.markEscaped(self: PlayerState, userId: number)
+	if type(userId) ~= "number" then
+		return
+	end
+	local rec = self.players[userId]
+	if not rec then
+		return
+	end
+	if rec.lifeState ~= Types.LifeState.Alive then
+		return
+	end
+	rec.lifeState = Types.LifeState.Escaped
+	dropEquipment(rec) -- il a quitté la map : plus de sprint/torche
+	resetRevive(rec) -- défensif : un Alive n'est pas réanimé, mais on repart propre
+end
+
 -- Demande de sprint. Autorisé seulement si Alive et stamina >= MinToStartSprint
 -- (anti « sprint clignotant »). Couper le sprint démarre le délai de régén.
 function PlayerState.setSprinting(self: PlayerState, userId: number, wants: boolean)
@@ -181,13 +211,18 @@ function PlayerState.setTorch(self: PlayerState, userId: number, on: boolean)
 	end
 end
 
--- Pile ramassée : recharge la batterie (plafonnée). Joueur mort → ignoré.
+-- Pile ramassée : recharge la batterie (plafonnée). Réservé à un joueur Alive :
+-- seul un vivant interagit (ramasser une pile suppose de se déplacer). Un Downed,
+-- Dead ou Escaped → ignoré (cohérent avec setSprinting/setTorch, aussi Alive-gated).
 function PlayerState.recharge(self: PlayerState, userId: number)
 	if type(userId) ~= "number" then
 		return
 	end
 	local rec = self.players[userId]
-	if not rec or rec.lifeState == Types.LifeState.Dead then
+	if not rec then
+		return
+	end
+	if rec.lifeState ~= Types.LifeState.Alive then
 		return
 	end
 	rec.battery = math.min(GameConfig.Torch.BatteryMax, rec.battery + GameConfig.Torch.RechargeOnPickup)
@@ -327,6 +362,42 @@ function PlayerState.areAllIncapacitated(self: PlayerState): boolean
 		end
 	end
 	return total > 0 and alive == 0
+end
+
+-- Vrai SSI ≥ 1 joueur suivi ET tous sont dans un état TERMINAL (Dead OU Escaped),
+-- c.-à-d. aucun Alive et aucun Downed restant : la manche peut se CONCLURE.
+-- 0 joueur → false (géré par RoundManager via l'abandon).
+--
+-- NE PAS confondre avec areAllIncapacitated (vrai dès qu'aucun n'est Alive, un
+-- Downed comptant comme incapacité « plus personne ne peut réanimer »). Ici un
+-- Downed n'est PAS résolu (il peut encore mourir OU être réanimé) : la fin attend
+-- qu'il devienne Dead. C'est cette requête, et non areAllIncapacitated, qui reste
+-- correcte en présence d'Escaped (un évadé ne doit jamais être lu comme un Écho
+-- qui gagne). Le SERVICE calcule ensuite le vainqueur : hasAnyEscaped() → Survivors,
+-- sinon (tous Dead) → Echo.
+--
+-- L'Écho n'étant pas inscrit dans ce registre (exclusion côté Service), cette
+-- requête opère mécaniquement sur les seuls survivants — aucune exclusion ici.
+function PlayerState.areAllSurvivorsResolved(self: PlayerState): boolean
+	local total = 0
+	for _, rec in self.players do
+		total += 1
+		if rec.lifeState ~= Types.LifeState.Dead and rec.lifeState ~= Types.LifeState.Escaped then
+			return false -- au moins un Alive ou Downed : pas encore résolu
+		end
+	end
+	return total > 0
+end
+
+-- Vrai SSI ≥ 1 joueur s'est échappé. Sert au Service à trancher le vainqueur une
+-- fois areAllSurvivorsResolved vrai : ≥ 1 évadé → victoire Survivors.
+function PlayerState.hasAnyEscaped(self: PlayerState): boolean
+	for _, rec in self.players do
+		if rec.lifeState == Types.LifeState.Escaped then
+			return true
+		end
+	end
+	return false
 end
 
 -- Projette le Record interne vers le contrat répliqué Types.PlayerState
