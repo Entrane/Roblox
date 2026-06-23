@@ -147,7 +147,7 @@ GameConfig.Entity = {
 
 	-- Entre WalkSpeed (12) et SprintSpeed (20) du joueur. Voir le bloc
 	-- « INTENTION DE DESIGN » ci-dessus. ⚠️ GROS PARI.
-	ChaseSpeed = 18, -- studs/s
+	ChaseSpeed = 16, -- studs/s
 
 	-- Détection visuelle.
 	SightRange = 40, -- studs
@@ -170,7 +170,11 @@ GameConfig.Entity = {
 
 	-- Attaque.
 	AttackRange = 4, -- studs
-	AttackCooldown = 2, -- s — laisse une fenêtre de fuite / réanimation
+	AttackCooldown = 3, -- s — laisse une fenêtre de fuite / réanimation
+
+	-- Coups AU SOL nécessaires pour achever un joueur à terre. Total pour tuer =
+	-- 1 (mise à terre) + HitsToFinish. À 2 → 3 coups minimum pour mourir.
+	HitsToFinish = 2,
 
 	-- Hypothèse : l'attaque MET À TERRE (ne tue pas directement). La mort vient
 	-- du cumul / de l'abandon. ⚠️ À CONFIRMER côté PlayerState.
@@ -195,7 +199,7 @@ GameConfig.Round = {
 GameConfig.Roles = {
 	-- Seuil de bascule, évalué AU DÉMARRAGE de manche uniquement (décision #7) :
 	-- >= ce nombre de joueurs → un humain incarne l'Écho ; en-dessous → Écho IA.
-	HumanEchoMinPlayers = 3,
+	HumanEchoMinPlayers = 2, -- TEST 2 comptes (remettre 3 pour la sortie)
 
 	-- Toujours un seul Écho par manche.
 	EchoCount = 1,
@@ -234,7 +238,7 @@ GameConfig.Echo = {
 	Frenzy = {
 		Cooldown = 30, -- s
 		Duration = 5, -- s
-		SpeedMultiplier = 1.4, -- × MoveSpeed pendant Duration
+		SpeedMultiplier = 1.2, -- × MoveSpeed pendant Duration
 	},
 }
 

@@ -68,6 +68,7 @@ local IS_STUDIO = RunService:IsStudio()
 -- Compteurs de manche pour la progression (XP). Lus par ProgressionService au
 -- Resolved, réinitialisés à l'entrée Playing. Aucun module Logic impliqué.
 local roundKills = 0 -- nb de Downed→Dead causés par applyAttack (= kills de l'Écho)
+local downedHits: { [number]: number } = {} -- userId -> coups encaissés à terre (achèvement)
 local roundRevives: { [number]: number } = {} -- rescuerId -> nb de réanimations réussies
 local lastRescuerOf: { [number]: number } = {} -- targetId -> sauveteur tenant la réa (ce tick)
 
@@ -182,6 +183,7 @@ local function onLifeStateChanged(userId: number, previous: Types.PlayerLifeStat
 		enterDowned(userId)
 	elseif current == Types.LifeState.Alive then
 		exitDowned(userId) -- depuis Downed (réanimation)
+		downedHits[userId] = nil
 		-- Crédit XP : Downed→Alive = réanimation réussie. On crédite le sauveteur
 		-- qui tenait la réa ce tick (lastRescuerOf, connu de resolveRevives).
 		if previous == Types.LifeState.Downed then
@@ -285,6 +287,7 @@ local function onPlayingStarted()
 
 	-- Reset des compteurs de manche (progression).
 	roundKills = 0
+	downedHits = {}
 	roundRevives = {}
 	lastRescuerOf = {}
 	playingStartedAt = os.clock()
@@ -514,11 +517,28 @@ end
 -- update) ne passe PAS par ici → non compté comme kill, ce qui est voulu.
 function PlayerService.applyAttack(userId: number)
 	local before = playerState:getState(userId)
-	playerState:applyAttack(userId)
-	local after = playerState:getState(userId)
-	if before and after and before.lifeState == Types.LifeState.Downed and after.lifeState == Types.LifeState.Dead then
-		roundKills += 1
+	if not before then
+		return
 	end
+
+	if before.lifeState == Types.LifeState.Alive then
+		-- Premier coup : Alive -> Downed (met à terre, démarre le saignement).
+		playerState:applyAttack(userId)
+		downedHits[userId] = 0
+	elseif before.lifeState == Types.LifeState.Downed then
+		-- Achèvement : il faut HitsToFinish coups AU SOL pour tuer (>=3 au total).
+		-- Les coups intermédiaires sont encaissés sans changer l'état.
+		downedHits[userId] = (downedHits[userId] or 0) + 1
+		if downedHits[userId] >= GameConfig.Entity.HitsToFinish then
+			playerState:applyAttack(userId) -- Downed -> Dead
+			local after = playerState:getState(userId)
+			if after and after.lifeState == Types.LifeState.Dead then
+				roundKills += 1
+			end
+			downedHits[userId] = nil
+		end
+	end
+	-- Dead/Escaped : aucun effet.
 end
 
 -- Lecture : compteurs de manche pour la progression (lus par ProgressionService
@@ -546,6 +566,18 @@ end
 -- sortie. markEscaped est gardé Alive côté PlayerState (Downed/Dead/Escaped →
 -- no-op). C'est le maillon qui alimente resolveRoundResolution (areAllSurvivorsResolved
 -- / hasAnyEscaped → victoire Survivors).
+-- Retire l'Écho humain du registre survivant. SÉCURITÉ : garantit l'exclusion
+-- meme si l'ordre d'init/Heartbeat ne l'a pas exclu a l'entree en Playing (sinon
+-- l'Écho meurt via le système de survie et peut se cibler lui-même en mêlée).
+-- Appelé par EchoService au setup de l'Écho humain. Idempotent.
+function PlayerService.unregisterEcho(userId: number)
+	playerState:removePlayer(userId)
+	reviveIntents[userId] = nil
+	lastLife[userId] = nil
+	downedHits[userId] = nil
+	survivalEndAt[userId] = nil
+end
+
 function PlayerService.markEscaped(userId: number)
 	playerState:markEscaped(userId)
 end

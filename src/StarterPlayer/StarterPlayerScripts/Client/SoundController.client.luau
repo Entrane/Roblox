@@ -27,6 +27,11 @@ local function playSound(soundId: unknown, volume: unknown)
 	if type(soundId) ~= "string" or soundId == "" then
 		return
 	end
+	-- Placeholder (pas un vrai asset rbxassetid://) : on ne tente pas de le
+	-- charger, sinon Roblox spamme « Failed to load sound ... Temp read failed ».
+	if string.sub(soundId, 1, 6) ~= "rbxass" then
+		return
+	end
 	local sound = Instance.new("Sound")
 	sound.SoundId = soundId
 	sound.Volume = if type(volume) == "number" then volume else 0.5

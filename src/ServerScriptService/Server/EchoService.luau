@@ -76,6 +76,7 @@ local lastMeleeAt = -1e9
 -- déjà avoir disparu pendant PlayerRemoving) — on réutilise cette valeur
 -- capturée AVANT le teardown. ⚠️ À VALIDER DANS STUDIO (continuité visuelle).
 local lastEchoPosition: Vector3? = nil
+local hiddenEntity: Model? = nil -- corps de l'entite IA range pendant un Echo humain
 
 local lastPhase: Types.RoundPhase = RoundService.getRoundManager():getPhase()
 local missingEntityWarned = false
@@ -359,6 +360,79 @@ end
 -- Démarrage / fin de manche
 -- ───────────────────────────────────────────────────────────────────────
 
+-- ───────────────────────────────────────────────────────────────────────
+-- Écho HUMAIN : apparence d'entité, masquage du corps IA, setup du perso
+-- ───────────────────────────────────────────────────────────────────────
+
+-- Donne au perso du joueur-Écho un look d'entité : sombre, œil néon, sans
+-- vêtements/accessoires par défaut. MVP visuel (vrai mesh plus tard).
+local function applyEchoAppearance(character: Model)
+	for _, item in character:GetDescendants() do
+		if item:IsA("BasePart") then
+			item.Color = Color3.fromRGB(20, 20, 26)
+			item.Material = Enum.Material.Slate
+			if item.Name == "Head" then
+				item.Material = Enum.Material.Neon
+				item.Color = Color3.fromRGB(120, 12, 12)
+				if not item:FindFirstChildOfClass("PointLight") then
+					local light = Instance.new("PointLight")
+					light.Color = Color3.fromRGB(200, 30, 30)
+					light.Range = 14
+					light.Brightness = 2
+					light.Parent = item
+				end
+			end
+		elseif item:IsA("Shirt") or item:IsA("Pants") or item:IsA("ShirtGraphic")
+			or item:IsA("Accessory") or item:IsA("Decal") or item:IsA("CharacterMesh") then
+			item:Destroy()
+		end
+	end
+end
+
+-- Range / restaure le corps de l'entité IA (toujours présent dans la map).
+local function hideEntity()
+	local model = Workspace:FindFirstChild("Entity")
+	if model and model:IsA("Model") then
+		hiddenEntity = model
+		model.Parent = ServerStorage
+	end
+end
+local function showEntity()
+	if hiddenEntity then
+		hiddenEntity.Parent = Workspace
+		hiddenEntity = nil
+	end
+end
+
+-- Setup complet du joueur-Écho humain : perso frais (CharacterAutoLoads=false →
+-- on charge nous-mêmes, sinon corps résiduel = mort « toute seule »), apparence,
+-- vitesse, spawn à l'écart des survivants. Lancé en thread (LoadCharacter yield).
+local function setupHumanEcho(uid: number)
+	local player = Players:GetPlayerByUserId(uid)
+	if not player then
+		return
+	end
+	-- SÉCURITÉ : l'Écho ne doit JAMAIS être un survivant inscrit. On le retire ici
+	-- (après l'éventuelle inscription par PlayerService.onPlayingStarted, même frame),
+	-- puis on charge SON perso en dernier → ni mort de survivant, ni auto-ciblage.
+	PlayerService.unregisterEcho(uid)
+	player:LoadCharacter()
+	local character = player.Character or player.CharacterAdded:Wait()
+	PlayerService.unregisterEcho(uid)
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		humanoid.WalkSpeed = GameConfig.Echo.MoveSpeed
+	end
+	applyEchoAppearance(character)
+	-- Spawn à l'écart (couloir +X, là où se tient l'entité IA).
+	character:PivotTo(CFrame.new(25, 5, 0))
+	-- Ré-applique après chargement tardif des accessoires (idempotent).
+	task.wait(0.5)
+	if character.Parent then
+		applyEchoAppearance(character)
+	end
+end
+
 -- Entrée en Playing : fige le mode (décision #7), crée les instances fraîches,
 -- assigne et notifie les rôles.
 local function onPlayingStarted()
@@ -377,10 +451,18 @@ local function onPlayingStarted()
 		mode = "Human"
 		echoUserId = roleManager:getEchoUserId()
 		entityAI = nil
+		hideEntity() -- pas d'entite IA visible pendant un Echo humain
+		local uid = echoUserId
+		if uid then
+			task.spawn(function()
+				setupHumanEcho(uid)
+			end)
+		end
 	else
 		mode = "AI"
 		echoUserId = nil
 		entityAI = EntityAI.new()
+		showEntity() -- l'entite IA reprend sa place
 	end
 
 	-- Notifie chaque joueur de son rôle (FireClient ciblé).
@@ -391,6 +473,7 @@ end
 
 -- Sortie de Playing : on cesse de piloter ; instances par-manche libérées.
 local function onPlayingEnded()
+	showEntity() -- restaure l'entite IA pour la prochaine manche
 	echoController = nil
 	entityAI = nil
 	mode = nil
@@ -407,6 +490,7 @@ local function switchToAI()
 	-- ⚠️ À VALIDER DANS STUDIO : on FERA apparaître le corps de l'entité à
 	-- lastEchoPosition (capturée AVANT le départ, cf. tickHuman) avec repli sur un
 	-- spawn si nil. Le spawn/déplacement concret du modèle est l'étape asset entité.
+	showEntity()
 	local _spawnPos = lastEchoPosition
 	print("[EchoService] Écho humain parti → bascule IA pour le reste de la manche.")
 end
