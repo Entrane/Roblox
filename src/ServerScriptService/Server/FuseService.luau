@@ -39,8 +39,19 @@ local FuseSystem = require(ServerStorage.Logic.FuseSystem)
 local Types = require(ReplicatedStorage.Shared.Types)
 local GameConfig = require(ReplicatedStorage.Shared.GameConfig)
 local Remotes = require(ReplicatedStorage.Remotes.RemotesManifest)
+local SoundConfig = require(ReplicatedStorage.Shared.SoundConfig)
 local RoundService = require(script.Parent.RoundService)
 local PlayerService = require(script.Parent.PlayerService)
+
+-- Sons gameplay via SoundEvent (FireClient ciblé, jamais FireAllClients).
+local function fireSoundTo(player: Player, soundId: string)
+	Remotes.SoundEvent:FireClient(player, { soundId = soundId })
+end
+local function fireSoundAll(soundId: string)
+	for _, player in Players:GetPlayers() do
+		Remotes.SoundEvent:FireClient(player, { soundId = soundId })
+	end
+end
 
 local FuseService = {}
 
@@ -182,7 +193,9 @@ local function onFusePromptTriggered(fuseId: number, player: Player)
 		return -- Écho / Downed / Dead : rejeté (garde FuseService, pas FuseSystem)
 	end
 	-- pickup applique ses propres gardes (Hidden, un seul porté) et renvoie un bool.
-	fuseSystem:pickup(fuseId, player.UserId)
+	if fuseSystem:pickup(fuseId, player.UserId) then
+		fireSoundTo(player, SoundConfig.FUSE_PICKUP)
+	end
 	-- Le visuel suit via reconcileVisuals (Carried → porteur).
 end
 
@@ -199,6 +212,7 @@ local function checkExitUnlock()
 	end
 	exitUnlocked = true
 	print("[FuseService] 5/5 fusibles déposés — sortie déverrouillée.")
+	fireSoundAll(SoundConfig.GENERATOR_UNLOCK)
 end
 
 local function onGeneratorTriggered(player: Player)
@@ -220,6 +234,7 @@ local function onGeneratorTriggered(player: Player)
 		local progress = fuseSystem:getProgress()
 		print(string.format("[FuseService] Fusible %d déposé (%d/%d).", carriedId, progress.collected, progress.required))
 		roundDeposits[player.UserId] = (roundDeposits[player.UserId] or 0) + 1 -- crédit XP
+		fireSoundTo(player, SoundConfig.FUSE_DEPOSIT)
 		checkExitUnlock()
 	end
 end

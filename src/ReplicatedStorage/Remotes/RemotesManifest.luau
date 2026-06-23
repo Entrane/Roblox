@@ -66,6 +66,9 @@ local EVENT_NAMES = {
 	-- ── Serveur → client (progression, FireClient ciblé) ──
 	"XpResult", -- (result: Types.XpResult) — FireClient en fin de manche
 	"QuestState", -- (state: Types.QuestState) — FireClient au chargement + après manche
+
+	-- ── Serveur → client (sons gameplay, FireClient ciblé) ──
+	"SoundEvent", -- ({ soundId: string, volume: number? }) — FireClient (boucle pour "tous")
 }
 
 -- Trouve le RemoteEvent ; le crée côté serveur, l'attend côté client.
@@ -102,6 +105,8 @@ export type Remotes = {
 	-- Serveur → client (progression)
 	XpResult: RemoteEvent,
 	QuestState: RemoteEvent,
+	-- Serveur → client (sons)
+	SoundEvent: RemoteEvent,
 }
 
 local Remotes = {} :: Remotes

@@ -32,6 +32,14 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RoundManager = require(ServerStorage.Logic.RoundManager)
 local Types = require(ReplicatedStorage.Shared.Types)
 local Remotes = require(ReplicatedStorage.Remotes.RemotesManifest)
+local SoundConfig = require(ReplicatedStorage.Shared.SoundConfig)
+
+-- Émet un son à TOUS les joueurs via FireClient (jamais FireAllClients).
+local function fireSoundAll(soundId: string)
+	for _, player in Players:GetPlayers() do
+		Remotes.SoundEvent:FireClient(player, { soundId = soundId })
+	end
+end
 
 local RoundService = {}
 
@@ -99,6 +107,13 @@ local function onPhaseChanged(previous: Types.RoundPhase, current: Types.RoundPh
 
 	if current == Types.RoundPhase.Lobby or current == Types.RoundPhase.Starting or current == Types.RoundPhase.Playing then
 		teleportAllPlayersToSpawn()
+	end
+
+	-- Sons de transition (à tous, FireClient en boucle).
+	if current == Types.RoundPhase.Playing then
+		fireSoundAll(SoundConfig.ROUND_START)
+	elseif current == Types.RoundPhase.Resolved then
+		fireSoundAll(SoundConfig.ROUND_END)
 	end
 
 	-- Resolved : aucune action sur le monde — les joueurs restent où l'instant
