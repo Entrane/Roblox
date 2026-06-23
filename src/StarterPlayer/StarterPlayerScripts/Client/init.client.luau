@@ -23,6 +23,7 @@ local HudController = require(script.HudController)
 local InputController = require(script.InputController)
 local ReviveController = require(script.ReviveController)
 local ProgressionController = require(script.ProgressionController)
+local SpectatorController = require(script.SpectatorController)
 
 -- Rôle courant appliqué (nil = pas encore connu).
 local currentRole: Types.Role? = nil
@@ -57,6 +58,7 @@ end
 
 HudController.init()
 ProgressionController.init() -- non role-gated : XP/quêtes pour tous
+SpectatorController.init() -- non role-gated : spectateur si Dead/Escaped
 
 Remotes.AssignRole.OnClientEvent:Connect(onAssignRole)
 

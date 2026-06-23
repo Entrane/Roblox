@@ -1,38 +1,39 @@
 --!strict
--- SpectatorController (client) — LocalScript AUTONOME (le suffixe « .client » en
--- fait un LocalScript côté Rojo, non requérable, comme EchoController.client).
---
--- Quand le joueur local est Dead OU Escaped (lifeState reçu via PlayerHud), il
--- passe en mode SPECTATEUR : la caméra suit un survivant encore en vie, avec une
--- barre « ◀  👁 Nom  ▶ » pour changer de cible. Il en SORT au respawn (lifeState
--- redevient Alive) — un Downed n'est PAS spectateur (il peut être réanimé).
+-- SpectatorController — Mode spectateur pour les joueurs éliminés (Dead/Escaped).
+-- ModuleScript initialisé par init.client (comme ProgressionController, NON
+-- role-gated). Quand le joueur local est Dead/Escaped (lifeState reçu via
+-- PlayerHud), il observe les survivants restants ; il en sort au respawn
+-- (lifeState Alive) ou au retour Lobby.
 --
 -- ─── 100 % CLIENT, AUCUNE DONNÉE SERVEUR SUPPLÉMENTAIRE ──────────────────
--- Les personnages sont déjà répliqués par Roblox : un joueur éliminé (hors
--- manche) peut légitimement les observer. On ne fait que déplacer la caméra
--- (CameraSubject) sur des persos existants. L'info secrète de l'Écho
--- (écholocation) n'est JAMAIS concernée ici — c'est un autre canal, ciblé.
+-- Les personnages sont déjà répliqués par Roblox : un éliminé (hors manche) peut
+-- légitimement les observer. On ne fait que déplacer CameraSubject. L'info
+-- secrète de l'Écho (écholocation) n'est JAMAIS concernée — autre canal, ciblé.
 --
--- ⚠️ À VALIDER DANS STUDIO : comportement caméra (CameraSubject/CameraType),
--- respawn, et rendu tactile de la barre sur mobile.
+-- ⚠️ À VALIDER DANS STUDIO : caméra (CameraSubject/CameraType), respawn, Tab.
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
+local ContextActionService = game:GetService("ContextActionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Types = require(ReplicatedStorage.Shared.Types)
 local Remotes = require(ReplicatedStorage.Remotes.RemotesManifest)
 
+local SpectatorController = {}
+
 local localPlayer = Players.LocalPlayer
+local NEXT_ACTION = "SL_SpectateNext"
 
 local active = false
-local targets: { Player } = {} -- survivants observables (recalculés à chaque action)
+local initialized = false
+local targets: { Player } = {} -- survivants observables (Alive/Downed), recalculés à chaque action
 local index = 1
 local gui: ScreenGui? = nil
 local nameLabel: TextLabel? = nil
 
 -- ───────────────────────────────────────────────────────────────────────
--- Helpers monde (défensifs : perso pas chargé / mort)
+-- Helpers monde (défensifs)
 -- ───────────────────────────────────────────────────────────────────────
 
 local function ownHumanoid(): Humanoid?
@@ -43,9 +44,9 @@ local function ownHumanoid(): Humanoid?
 	return char:FindFirstChildOfClass("Humanoid")
 end
 
--- Humanoid d'un AUTRE joueur s'il est vivant (Health > 0), sinon nil → exclu de
--- la liste d'observation.
-local function aliveHumanoidOf(player: Player): Humanoid?
+-- Humanoid d'un AUTRE joueur encore en jeu (Health > 0 → Alive OU Downed), sinon
+-- nil. Un mort (Health 0) ou sans perso est exclu des cibles.
+local function liveHumanoidOf(player: Player): Humanoid?
 	local char = player.Character
 	if not char then
 		return nil
@@ -61,23 +62,18 @@ end
 -- Cible / caméra
 -- ───────────────────────────────────────────────────────────────────────
 
--- Recalcule la liste des survivants observables (autres joueurs vivants).
 local function refreshTargets()
 	table.clear(targets)
 	for _, p in Players:GetPlayers() do
-		if p ~= localPlayer and aliveHumanoidOf(p) then
+		if p ~= localPlayer and liveHumanoidOf(p) then
 			table.insert(targets, p)
 		end
 	end
 	if index > #targets then
 		index = 1
 	end
-	if index < 1 then
-		index = 1
-	end
 end
 
--- Pointe la caméra sur la cible courante (CameraSubject). Vide → message.
 local function spectateCurrent()
 	local camera = Workspace.CurrentCamera
 	if not camera then
@@ -93,7 +89,7 @@ local function spectateCurrent()
 		index = 1
 	end
 	local target = targets[index]
-	local h = aliveHumanoidOf(target)
+	local h = liveHumanoidOf(target)
 	if h then
 		camera.CameraType = Enum.CameraType.Custom
 		camera.CameraSubject = h
@@ -103,40 +99,35 @@ local function spectateCurrent()
 	end
 end
 
--- Change de cible (delta = +1 / -1) après recalcul (une cible a pu mourir/partir).
-local function cycle(delta: number)
+-- Passe à la cible suivante (après recalcul : une cible a pu mourir/partir).
+local function spectateNext()
+	if not active then
+		return
+	end
 	refreshTargets()
 	if #targets == 0 then
 		spectateCurrent()
 		return
 	end
-	index += delta
+	index += 1
 	if index > #targets then
 		index = 1
-	elseif index < 1 then
-		index = #targets
 	end
 	spectateCurrent()
 end
 
--- ───────────────────────────────────────────────────────────────────────
--- UI (barre bas-centre, créée à la volée)
--- ───────────────────────────────────────────────────────────────────────
-
-local function makeButton(parent: Instance, text: string, posX: number): TextButton
-	local b = Instance.new("TextButton")
-	b.Size = UDim2.fromOffset(48, 40)
-	b.Position = UDim2.fromOffset(posX, 4)
-	b.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
-	b.BackgroundTransparency = 0.3
-	b.TextColor3 = Color3.fromRGB(235, 235, 235)
-	b.TextScaled = true
-	b.Text = text
-	b.Parent = parent
-	return b
+local function onNextAction(_action: string, state: Enum.UserInputState): Enum.ContextActionResult
+	if state == Enum.UserInputState.Begin then
+		spectateNext()
+	end
+	return Enum.ContextActionResult.Sink -- on consomme Tab pendant le spectateur
 end
 
-local function ensureGui()
+-- ───────────────────────────────────────────────────────────────────────
+-- UI
+-- ───────────────────────────────────────────────────────────────────────
+
+local function buildGui()
 	if gui then
 		return
 	end
@@ -147,20 +138,29 @@ local function ensureGui()
 	g.Enabled = false
 	g.Parent = localPlayer:WaitForChild("PlayerGui")
 
+	-- Bandeau d'info (haut).
+	local info = Instance.new("TextLabel")
+	info.Size = UDim2.fromOffset(560, 30)
+	info.Position = UDim2.new(0.5, -280, 0.04, 0)
+	info.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+	info.BackgroundTransparency = 0.5
+	info.TextColor3 = Color3.fromRGB(235, 235, 235)
+	info.TextScaled = false
+	info.TextSize = 16
+	info.Text = "SPECTATEUR — Appuyez sur Tab pour changer de vue"
+	info.Parent = g
+
+	-- Barre du bas : nom observé + bouton tactile « Suivant ».
 	local bar = Instance.new("Frame")
-	bar.Name = "Bar"
 	bar.Size = UDim2.fromOffset(360, 48)
 	bar.Position = UDim2.new(0.5, -180, 0.88, 0)
 	bar.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
 	bar.BackgroundTransparency = 0.5
 	bar.Parent = g
 
-	local prev = makeButton(bar, "◀", 4)
-	local next = makeButton(bar, "▶", 308)
-
 	local label = Instance.new("TextLabel")
-	label.Size = UDim2.fromOffset(248, 40)
-	label.Position = UDim2.fromOffset(56, 4)
+	label.Size = UDim2.fromOffset(232, 40)
+	label.Position = UDim2.fromOffset(8, 4)
 	label.BackgroundTransparency = 1
 	label.TextColor3 = Color3.fromRGB(235, 235, 235)
 	label.TextScaled = false
@@ -169,18 +169,22 @@ local function ensureGui()
 	label.Parent = bar
 	nameLabel = label
 
-	prev.Activated:Connect(function()
-		cycle(-1)
-	end)
-	next.Activated:Connect(function()
-		cycle(1)
-	end)
+	local nextBtn = Instance.new("TextButton")
+	nextBtn.Size = UDim2.fromOffset(108, 40)
+	nextBtn.Position = UDim2.fromOffset(248, 4)
+	nextBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
+	nextBtn.BackgroundTransparency = 0.3
+	nextBtn.TextColor3 = Color3.fromRGB(235, 235, 235)
+	nextBtn.TextScaled = true
+	nextBtn.Text = "Suivant ▶"
+	nextBtn.Parent = bar
+	nextBtn.Activated:Connect(spectateNext)
 
 	gui = g
 end
 
 -- ───────────────────────────────────────────────────────────────────────
--- Entrée / sortie du mode
+-- Entrée / sortie
 -- ───────────────────────────────────────────────────────────────────────
 
 local function enterSpectator()
@@ -188,13 +192,15 @@ local function enterSpectator()
 		return
 	end
 	active = true
-	ensureGui()
+	buildGui()
 	if gui then
 		gui.Enabled = true
 	end
 	index = 1
 	refreshTargets()
 	spectateCurrent()
+	-- Tab pour cycler (lié SEULEMENT pendant le spectateur → pas d'interférence).
+	ContextActionService:BindAction(NEXT_ACTION, onNextAction, false, Enum.KeyCode.Tab)
 end
 
 local function exitSpectator()
@@ -205,8 +211,8 @@ local function exitSpectator()
 	if gui then
 		gui.Enabled = false
 	end
-	-- Restaure la caméra sur son propre personnage (au respawn, Roblox la réinit
-	-- de toute façon ; on couvre le cas où le perso est déjà là).
+	ContextActionService:UnbindAction(NEXT_ACTION)
+	-- Caméra remise sur son propre personnage (au respawn Roblox la réinit aussi).
 	local camera = Workspace.CurrentCamera
 	if camera then
 		camera.CameraType = Enum.CameraType.Custom
@@ -218,7 +224,7 @@ local function exitSpectator()
 end
 
 -- ───────────────────────────────────────────────────────────────────────
--- Pilotage par le lifeState reçu (PlayerHud, ciblé au joueur)
+-- Pilotage par lifeState (PlayerHud) + retour Lobby (RoundState)
 -- ───────────────────────────────────────────────────────────────────────
 
 local function onPlayerHud(state: Types.HudPlayerState)
@@ -228,8 +234,26 @@ local function onPlayerHud(state: Types.HudPlayerState)
 	if state.lifeState == Types.LifeState.Dead or state.lifeState == Types.LifeState.Escaped then
 		enterSpectator()
 	else
-		exitSpectator()
+		exitSpectator() -- redevenu Alive (respawn) → sortie
 	end
 end
 
-Remotes.PlayerHud.OnClientEvent:Connect(onPlayerHud)
+local function onRoundState(state: Types.RoundState)
+	if type(state) ~= "table" then
+		return
+	end
+	if state.phase == Types.RoundPhase.Lobby then
+		exitSpectator() -- retour Lobby : sortie propre quoi qu'il arrive
+	end
+end
+
+function SpectatorController.init()
+	if initialized then
+		return
+	end
+	initialized = true
+	Remotes.PlayerHud.OnClientEvent:Connect(onPlayerHud)
+	Remotes.RoundState.OnClientEvent:Connect(onRoundState)
+end
+
+return SpectatorController
