@@ -54,6 +54,7 @@ local EVENT_NAMES = {
 	"ActivateAbility", -- (abilityId: string=Types.AbilityId) — ÉCHO ; émetteur revalidé == Écho
 	"MeleeAttack", -- () — ÉCHO ; aucune cible (résolue serveur) ; émetteur + portée + cooldown revalidés
 	"SetActiveTitle", -- (title: string) — survivant/écho ; revalidé serveur (titre ∈ unlockedTitles)
+	"VoteReplay", -- () — n'importe quel joueur ; vote pour écourter l'intermission (Resolved)
 
 	-- ── Serveur → client (poussés, CIBLÉS, jamais FireAllClients) ──
 	"Echolocation", -- (pings: {Types.EcholocationPing}) — au SEUL client Écho, au pulse
@@ -65,6 +66,7 @@ local EVENT_NAMES = {
 	"FuseProgress", -- (progress: Types.FuseProgress) — FireAllClients ; x/5
 	"PlayerHud", -- (state: Types.HudPlayerState) — FireClient au SEUL joueur concerné
 	"RoundLeaderboard", -- (board: Types.RoundLeaderboard) — FireAllClients, 1× au Resolved ; classement
+	"VoteState", -- (state: Types.VoteState) — FireAllClients ; avancement du vote « rejouer »
 
 	-- ── Serveur → client (progression, FireClient ciblé) ──
 	"XpResult", -- (result: Types.XpResult) — FireClient en fin de manche
@@ -99,6 +101,7 @@ export type Remotes = {
 	ActivateAbility: RemoteEvent,
 	MeleeAttack: RemoteEvent,
 	SetActiveTitle: RemoteEvent,
+	VoteReplay: RemoteEvent,
 	-- Serveur → client (ciblés)
 	Echolocation: RemoteEvent,
 	EchoState: RemoteEvent,
@@ -108,6 +111,7 @@ export type Remotes = {
 	FuseProgress: RemoteEvent,
 	PlayerHud: RemoteEvent,
 	RoundLeaderboard: RemoteEvent,
+	VoteState: RemoteEvent,
 	-- Serveur → client (progression)
 	XpResult: RemoteEvent,
 	QuestState: RemoteEvent,

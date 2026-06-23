@@ -30,6 +30,7 @@ local ServerStorage = game:GetService("ServerStorage")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local RoundManager = require(ServerStorage.Logic.RoundManager)
+local VoteManager = require(ServerStorage.Logic.VoteManager)
 local Types = require(ReplicatedStorage.Shared.Types)
 local Remotes = require(ReplicatedStorage.Remotes.RemotesManifest)
 local SoundConfig = require(ReplicatedStorage.Shared.SoundConfig)
@@ -51,6 +52,18 @@ local hudAccum = 0
 -- upvalue de module, comme RoundManager.new() le permet pour les tests). Les
 -- futurs Services la récupèrent via RoundService.getRoundManager().
 local roundManager: RoundManager.RoundManager = RoundManager.new()
+
+-- Vote « rejouer » : scrutin par manche, vidé à chaque entrée en Resolved.
+local voteManager: VoteManager.VoteManager = VoteManager.new()
+local VOTE_THRESHOLD = 0.5 -- majorité : ≥ 50 % des présents → on écourte
+
+-- Diffuse l'avancement du vote à tous (compteur live). total = présents.
+local function broadcastVoteState()
+	Remotes.VoteState:FireAllClients({
+		yesCount = voteManager:count(),
+		totalCount = #Players:GetPlayers(),
+	})
+end
 
 -- Dernière phase observée par CE Service (pas par RoundManager, qui n'a pas
 -- cette notion). Initialisée depuis l'état réel plutôt qu'en dur, pour ne pas
@@ -114,6 +127,8 @@ local function onPhaseChanged(previous: Types.RoundPhase, current: Types.RoundPh
 		fireSoundAll(SoundConfig.ROUND_START)
 	elseif current == Types.RoundPhase.Resolved then
 		fireSoundAll(SoundConfig.ROUND_END)
+		voteManager:clear() -- nouveau scrutin « rejouer » pour cette intermission
+		broadcastVoteState() -- compteur initial 0/total à tous
 	end
 
 	-- Resolved : aucune action sur le monde — les joueurs restent où l'instant
@@ -162,8 +177,35 @@ local function onPlayerJoined(player: Player)
 	roundManager:onPlayerJoined(player.UserId)
 end
 
+-- Si la majorité est atteinte, écourte l'intermission (RoundManager met le timer
+-- à 0 ; update applique la transition Resolved → Lobby au tick suivant).
+local function checkSkip()
+	if voteManager:getResult(#Players:GetPlayers(), VOTE_THRESHOLD) then
+		roundManager:requestSkipResolved()
+	end
+end
+
 local function onPlayerLeft(player: Player)
 	roundManager:onPlayerLeft(player.UserId)
+	-- Un votant qui part ne doit plus compter ; on rediffuse et réévalue (son
+	-- départ peut faire basculer la majorité côté restants).
+	if roundManager:getPhase() == Types.RoundPhase.Resolved then
+		voteManager:removeVote(player.UserId)
+		broadcastVoteState()
+		checkSkip()
+	end
+end
+
+-- Vote « rejouer » (client → serveur). N'a d'effet qu'en Resolved. Identité =
+-- player (OnServerEvent). Vote idempotent (ensemble) → spam inoffensif, pas de
+-- rate-limit nécessaire. Diffuse le compteur live et réévalue la majorité.
+local function onVoteReplay(player: Player)
+	if roundManager:getPhase() ~= Types.RoundPhase.Resolved then
+		return
+	end
+	voteManager:addVote(player.UserId)
+	broadcastVoteState()
+	checkSkip()
 end
 
 -- ───────────────────────────────────────────────────────────────────────
@@ -199,6 +241,8 @@ function RoundService.init()
 	end
 	Players.PlayerAdded:Connect(onPlayerJoined)
 	Players.PlayerRemoving:Connect(onPlayerLeft)
+
+	Remotes.VoteReplay.OnServerEvent:Connect(onVoteReplay)
 
 	RunService.Heartbeat:Connect(tick)
 end

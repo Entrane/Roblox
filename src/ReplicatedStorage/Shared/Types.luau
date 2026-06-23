@@ -304,4 +304,11 @@ export type RoundLeaderboard = {
 	entries: { LeaderboardEntry },
 }
 
+-- Payload VoteState (FireAllClients) : avancement du vote « rejouer » en Resolved.
+-- Diffusé à l'entrée en Resolved (0 / total) puis à chaque vote (compteur live).
+export type VoteState = {
+	yesCount: number,
+	totalCount: number,
+}
+
 return Types

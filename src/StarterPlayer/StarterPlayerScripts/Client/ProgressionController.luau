@@ -39,6 +39,12 @@ type LbRow = { frame: Frame, label: TextLabel, stroke: UIStroke }
 local lbRows: { LbRow } = {}
 local LB_MAX_ROWS = 5
 
+-- Vote « rejouer » (affiché en Resolved).
+local replayButton: TextButton? = nil
+local replayCountLabel: TextLabel? = nil -- « X/Y veulent rejouer »
+local replayVoted = false
+local lastPhaseSeen: Types.RoundPhase? = nil
+
 -- Panneau « Titres » (lobby) : sélection manuelle du titre actif.
 local titlesPanel: Frame? = nil
 local titlesScroll: ScrollingFrame? = nil
@@ -141,6 +147,26 @@ local function onRoundState(state: Types.RoundState)
 	if leaderboardPanel and state.phase ~= Types.RoundPhase.Resolved then
 		leaderboardPanel.Visible = false
 	end
+	-- Bouton « Rejouer ? » + compteur : visibles en Resolved seulement. On
+	-- RÉINITIALISE le vote à l'ENTRÉE en Resolved (transition), pas à chaque push.
+	local inResolved = state.phase == Types.RoundPhase.Resolved
+	if inResolved and lastPhaseSeen ~= Types.RoundPhase.Resolved then
+		replayVoted = false
+		if replayButton then
+			replayButton.Text = "Rejouer ?"
+			replayButton.AutoButtonColor = true
+		end
+		if replayCountLabel then
+			replayCountLabel.Text = ""
+		end
+	end
+	if replayButton then
+		replayButton.Visible = inResolved
+	end
+	if replayCountLabel then
+		replayCountLabel.Visible = inResolved
+	end
+	lastPhaseSeen = state.phase
 	-- L'écran XP n'a de sens qu'en Resolved : on le masque dès qu'on en sort.
 	if xpPanel and state.phase ~= Types.RoundPhase.Resolved then
 		xpPanel.Visible = false
@@ -265,6 +291,14 @@ local function onRoundLeaderboard(board: Types.RoundLeaderboard)
 		end
 	end
 	leaderboardPanel.Visible = true
+end
+
+-- Compteur live du vote « rejouer » (FireAllClients).
+local function onVoteState(state: Types.VoteState)
+	if type(state) ~= "table" or not replayCountLabel then
+		return
+	end
+	replayCountLabel.Text = string.format("%d/%d veulent rejouer", state.yesCount, state.totalCount)
 end
 
 -- ───────────────────────────────────────────────────────────────────────
@@ -427,12 +461,42 @@ function ProgressionController.init()
 		lbRows[i] = { frame = row, label = lbl, stroke = stroke }
 	end
 
+	-- Vote « rejouer » (haut-centre, sous la bannière vainqueur) : visible en Resolved.
+	local replay = Instance.new("TextButton")
+	replay.Name = "Replay"
+	replay.Size = UDim2.fromOffset(220, 40)
+	replay.Position = UDim2.new(0.5, -110, 0.13, 0)
+	replay.BackgroundColor3 = Color3.fromRGB(45, 90, 60)
+	replay.TextColor3 = Color3.fromRGB(235, 235, 235)
+	replay.TextScaled = true
+	replay.Text = "Rejouer ?"
+	replay.Visible = false
+	replay.Parent = gui
+	replay.Activated:Connect(function()
+		if replayVoted then
+			return
+		end
+		replayVoted = true
+		replay.Text = "Voté ✓"
+		replay.AutoButtonColor = false
+		Remotes.VoteReplay:FireServer()
+	end)
+	replayButton = replay
+
+	local replayCount = makeLabel(gui, UDim2.new(0.5, -110, 0.13, 42), UDim2.fromOffset(220, 22), false)
+	replayCount.TextXAlignment = Enum.TextXAlignment.Center
+	replayCount.TextSize = 15
+	replayCount.TextColor3 = Color3.fromRGB(180, 210, 255)
+	replayCount.Visible = false
+	replayCountLabel = replayCount
+
 	screenGui = gui
 
 	Remotes.RoundState.OnClientEvent:Connect(onRoundState)
 	Remotes.QuestState.OnClientEvent:Connect(onQuestState)
 	Remotes.XpResult.OnClientEvent:Connect(onXpResult)
 	Remotes.RoundLeaderboard.OnClientEvent:Connect(onRoundLeaderboard)
+	Remotes.VoteState.OnClientEvent:Connect(onVoteState)
 end
 
 return ProgressionController

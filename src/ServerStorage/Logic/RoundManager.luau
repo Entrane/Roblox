@@ -240,6 +240,16 @@ function RoundManager.update(self: RoundManager, dt: number)
 	end
 end
 
+-- Vote « rejouer » : écourte l'intermission. N'AGIT qu'en phase Resolved (sinon
+-- no-op) et ne transitionne PAS lui-même — il met juste le timer à 0, et update
+-- appliquera T6 (Resolved → Lobby) au prochain tick (discipline : update est le
+-- SEUL point de transition). Additif : ne change aucun comportement existant.
+function RoundManager.requestSkipResolved(self: RoundManager)
+	if self.phase == Types.RoundPhase.Resolved then
+		self.timeRemaining = 0
+	end
+end
+
 -- ───────────────────────────────────────────────────────────────────────
 -- Lecture (pure, sans effet de bord) — l'appelant lit et compare lui-même
 -- ───────────────────────────────────────────────────────────────────────
