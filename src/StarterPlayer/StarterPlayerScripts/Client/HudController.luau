@@ -80,23 +80,44 @@ local function makeLabel(name: string, pos: UDim2, size: UDim2): TextLabel
 	lbl.Name = name
 	lbl.Size = size
 	lbl.Position = pos
-	lbl.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-	lbl.BackgroundTransparency = 0.5
-	lbl.TextColor3 = Color3.fromRGB(235, 235, 235)
+	lbl.BackgroundColor3 = Color3.fromRGB(9, 11, 15)
+	lbl.BackgroundTransparency = 0.2
+	lbl.TextColor3 = Color3.fromRGB(170, 230, 218)
+	lbl.Font = Enum.Font.Code
 	lbl.TextScaled = true
 	lbl.Text = ""
+	local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 6); c.Parent = lbl
+	local st = Instance.new("UIStroke"); st.Color = Color3.fromRGB(38, 110, 100); st.Thickness = 1; st.Transparency = 0.25; st.Parent = lbl
+	local pad = Instance.new("UIPadding"); pad.PaddingLeft = UDim.new(0, 8); pad.PaddingRight = UDim.new(0, 8); pad.Parent = lbl
 	return lbl
 end
 
 -- Barre = conteneur sombre + remplissage proportionnel (scale X). Renvoie le fill.
-local function makeBar(parent: Instance, name: string, order: number, color: Color3): Frame
+local function makeBar(parent: Instance, name: string, order: number, color: Color3, label: string, icon: string): Frame
+	local holder = Instance.new("Frame")
+	holder.Name = name .. "Holder"
+	holder.Size = UDim2.fromOffset(214, 24)
+	holder.Position = UDim2.fromOffset(0, order * 30)
+	holder.BackgroundTransparency = 1
+	holder.Parent = parent
+
+	local ic = Instance.new("TextLabel")
+	ic.Size = UDim2.fromOffset(24, 24)
+	ic.BackgroundTransparency = 1
+	ic.Text = icon
+	ic.TextScaled = true
+	ic.TextColor3 = color
+	ic.Parent = holder
+
 	local bg = Instance.new("Frame")
 	bg.Name = name
-	bg.Size = UDim2.fromOffset(180, 18)
-	bg.Position = UDim2.fromOffset(12, order * 24)
-	bg.BackgroundColor3 = Color3.fromRGB(25, 25, 28)
+	bg.Size = UDim2.fromOffset(184, 16)
+	bg.Position = UDim2.fromOffset(30, 4)
+	bg.BackgroundColor3 = Color3.fromRGB(16, 17, 21)
 	bg.BorderSizePixel = 0
-	bg.Parent = parent
+	bg.Parent = holder
+	local bgc = Instance.new("UICorner"); bgc.CornerRadius = UDim.new(0, 4); bgc.Parent = bg
+	local bgs = Instance.new("UIStroke"); bgs.Color = Color3.fromRGB(58, 62, 70); bgs.Thickness = 1; bgs.Transparency = 0.2; bgs.Parent = bg
 
 	local fill = Instance.new("Frame")
 	fill.Name = "Fill"
@@ -104,6 +125,26 @@ local function makeBar(parent: Instance, name: string, order: number, color: Col
 	fill.BackgroundColor3 = color
 	fill.BorderSizePixel = 0
 	fill.Parent = bg
+	local fc = Instance.new("UICorner"); fc.CornerRadius = UDim.new(0, 4); fc.Parent = fill
+	local grad = Instance.new("UIGradient")
+	grad.Color = ColorSequence.new(color, Color3.new(color.R * 0.55, color.G * 0.55, color.B * 0.55))
+	grad.Rotation = 90
+	grad.Parent = fill
+	local fs = Instance.new("UIStroke"); fs.Color = color; fs.Thickness = 1; fs.Transparency = 0.35; fs.Parent = fill
+
+	local txt = Instance.new("TextLabel")
+	txt.Size = UDim2.fromScale(1, 1)
+	txt.BackgroundTransparency = 1
+	txt.Text = label
+	txt.Font = Enum.Font.Code
+	txt.TextSize = 11
+	txt.TextColor3 = Color3.fromRGB(235, 240, 245)
+	txt.TextXAlignment = Enum.TextXAlignment.Left
+	txt.TextTransparency = 0.1
+	txt.ZIndex = 3
+	txt.Parent = bg
+	local pad = Instance.new("UIPadding"); pad.PaddingLeft = UDim.new(0, 7); pad.Parent = txt
+
 	return fill
 end
 
@@ -210,29 +251,53 @@ end
 -- Torche AUTORITAIRE : la PointLight (locale, non répliquée) suit l'état serveur
 -- torchOn reçu, pas l'intention client. Si la batterie se vide serveur-side,
 -- torchOn passe false → la lumière s'éteint correctement.
+-- Lampe torche en CÔNE, orientée vers le REGARD (caméra). Un petit émetteur
+-- invisible suit la CFrame de la caméra chaque frame ; la SpotLight (Face Front =
+-- -Z = direction du regard) projette le cône devant le joueur. Local, non répliqué.
+local torchEmitter: Part? = nil
+local torchConn: RBXScriptConnection? = nil
+
+local function ensureTorchEmitter(): Part
+	if torchEmitter and torchEmitter.Parent then
+		return torchEmitter
+	end
+	local emitter = Instance.new("Part")
+	emitter.Name = "TorchEmitter"
+	emitter.Size = Vector3.new(0.2, 0.2, 0.2)
+	emitter.Anchored = true
+	emitter.CanCollide = false
+	emitter.CanQuery = false
+	emitter.Transparency = 1
+	emitter.Massless = true
+	local spot = Instance.new("SpotLight")
+	spot.Name = "Beam"
+	spot.Face = Enum.NormalId.Front
+	spot.Angle = 70
+	spot.Range = 55
+	spot.Brightness = 3.2
+	spot.Color = Color3.fromRGB(255, 244, 214)
+	spot.Shadows = true
+	spot.Enabled = false
+	spot.Parent = emitter
+	emitter.Parent = workspace.CurrentCamera or workspace
+	torchEmitter = emitter
+	if not torchConn then
+		torchConn = RunService.RenderStepped:Connect(function()
+			local cam = workspace.CurrentCamera
+			if torchEmitter and torchEmitter.Parent and cam then
+				torchEmitter.CFrame = cam.CFrame
+			end
+		end)
+	end
+	return emitter
+end
+
 local function setTorchLight(on: boolean)
-	local character = localPlayer.Character
-	if not character then
-		return
+	local emitter = ensureTorchEmitter()
+	local spot = emitter:FindFirstChildOfClass("SpotLight")
+	if spot then
+		spot.Enabled = on
 	end
-	local hrp = character:FindFirstChild("HumanoidRootPart")
-	if not hrp then
-		return
-	end
-	local light = hrp:FindFirstChild("TorchLight")
-	if not light then
-		if not on then
-			return
-		end
-		local pl = Instance.new("PointLight")
-		pl.Name = "TorchLight"
-		pl.Brightness = 2.5
-		pl.Range = 18
-		pl.Color = Color3.fromRGB(255, 244, 214)
-		pl.Parent = hrp
-		light = pl
-	end
-	(light :: PointLight).Enabled = on
 end
 
 local function onPlayerHud(state: Types.HudPlayerState)
@@ -347,6 +412,34 @@ end
 -- Construction
 -- ───────────────────────────────────────────────────────────────────────
 
+local function buildVignette(gui: ScreenGui)
+	local v = Instance.new("Frame")
+	v.Name = "Vignette"
+	v.Size = UDim2.fromScale(1, 1)
+	v.BackgroundTransparency = 1
+	v.ZIndex = 0
+	v.Parent = gui
+	local function strip(anchorY: number, posY: number, rot: number)
+		local f = Instance.new("Frame")
+		f.Size = UDim2.new(1, 0, 0, 160)
+		f.AnchorPoint = Vector2.new(0, anchorY)
+		f.Position = UDim2.new(0, 0, posY, 0)
+		f.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+		f.BorderSizePixel = 0
+		f.ZIndex = 0
+		f.Parent = v
+		local g = Instance.new("UIGradient")
+		g.Rotation = rot
+		g.Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 0.2),
+			NumberSequenceKeypoint.new(1, 1),
+		})
+		g.Parent = f
+	end
+	strip(0, 0, 90)
+	strip(1, 1, 270)
+end
+
 function HudController.init()
 	if screenGui then
 		return -- idempotent
@@ -356,6 +449,7 @@ function HudController.init()
 	gui.ResetOnSpawn = false
 	gui.IgnoreGuiInset = true
 	gui.Parent = localPlayer:WaitForChild("PlayerGui")
+	buildVignette(gui)
 
 	-- Boutons d'action (bas-droite).
 	local actions = Instance.new("Frame")
@@ -385,14 +479,14 @@ function HudController.init()
 	-- Barres stamina/batterie (survivant ; cachées par défaut, gérées par setRole).
 	local stats = Instance.new("Frame")
 	stats.Name = "Stats"
-	stats.Size = UDim2.fromOffset(192, 60)
-	stats.Position = UDim2.new(0, 0, 1, -76)
+	stats.Size = UDim2.fromOffset(220, 72)
+	stats.Position = UDim2.new(0, 12, 1, -92)
 	stats.BackgroundTransparency = 1
 	stats.Visible = false
 	stats.Parent = gui
 	statsFrame = stats
-	staminaFill = makeBar(stats, "Stamina", 0, Color3.fromRGB(90, 200, 90))
-	batteryFill = makeBar(stats, "Battery", 1, Color3.fromRGB(230, 210, 80))
+	staminaFill = makeBar(stats, "Stamina", 0, Color3.fromRGB(80, 210, 130), "ENDURANCE", "⚡")
+	batteryFill = makeBar(stats, "Battery", 1, Color3.fromRGB(235, 205, 80), "LAMPE", "🔋")
 
 	-- Overlay d'état (centre) : "À TERRE / MORT / ÉVADÉ".
 	local status = makeLabel("Status", UDim2.new(0.5, -150, 0.42, 0), UDim2.fromOffset(300, 48))
