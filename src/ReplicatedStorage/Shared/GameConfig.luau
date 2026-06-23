@@ -82,7 +82,7 @@ GameConfig.Torch = {
 
 	-- 100 / 2 = 50 s de lumière continue. Ressort de tension central
 	-- (rester dans le noir vs se faire repérer). ⚠️ GROS PARI — retester en 1er.
-	DrainPerSecond = 2,
+	DrainPerSecond = 0.8,
 
 	-- Provision pour de futures piles ramassables (la 3D viendra plus tard ;
 	-- ici on ne définit que la valeur rendue par un pickup).

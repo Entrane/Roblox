@@ -272,9 +272,9 @@ local function ensureTorchEmitter(): Part
 	local spot = Instance.new("SpotLight")
 	spot.Name = "Beam"
 	spot.Face = Enum.NormalId.Front
-	spot.Angle = 70
-	spot.Range = 55
-	spot.Brightness = 3.2
+	spot.Angle = 68
+	spot.Range = 80
+	spot.Brightness = 6
 	spot.Color = Color3.fromRGB(255, 244, 214)
 	spot.Shadows = true
 	spot.Enabled = false
