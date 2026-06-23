@@ -31,6 +31,8 @@ local staminaFill: Frame? = nil
 local batteryFill: Frame? = nil
 local statusLabel: TextLabel? = nil -- "À TERRE / MORT / ÉVADÉ"
 local resultLabel: TextLabel? = nil -- écran de fin (phase Resolved)
+local onboardingLabel: TextLabel? = nil -- objectif affiché 5 s au démarrage
+local onboardingToken = 0 -- invalide un timer d'onboarding obsolète (changement de rôle)
 
 -- État local du timer (resync sur chaque RoundState, décompté entre les pushes).
 local roundPhase: Types.RoundPhase = Types.RoundPhase.Lobby
@@ -261,6 +263,13 @@ function HudController.init()
 	status.Parent = gui
 	statusLabel = status
 
+	-- Onboarding (objectif), affiché ~5 s au démarrage de manche, centré haut.
+	local onboarding = makeLabel("Onboarding", UDim2.new(0.5, -300, 0.28, 0), UDim2.fromOffset(600, 56))
+	onboarding.TextColor3 = Color3.fromRGB(220, 235, 255)
+	onboarding.Visible = false
+	onboarding.Parent = gui
+	onboardingLabel = onboarding
+
 	-- Écran de fin (centre, plus grand) : qui a gagné. Tous rôles (RoundState
 	-- est FireAllClients). Masqué hors Resolved.
 	local result = makeLabel("Result", UDim2.new(0.5, -260, 0.4, -40), UDim2.fromOffset(520, 80))
@@ -281,6 +290,33 @@ end
 -- ───────────────────────────────────────────────────────────────────────
 -- Visibilité par rôle
 -- ───────────────────────────────────────────────────────────────────────
+
+-- Affiche l'objectif du rôle ~5 s puis masque. Le token invalide un timer
+-- précédent si le rôle change avant la fin des 5 s.
+local function showOnboarding(role: Types.Role?)
+	if not onboardingLabel then
+		return
+	end
+	local text: string? = nil
+	if role == Types.Role.Survivor then
+		text = "Trouvez les 5 fusibles, alimentez le générateur et fuyez !"
+	elseif role == Types.Role.Echo then
+		text = "Traque les survivants. Empêche-les de s'échapper."
+	end
+	if not text then
+		onboardingLabel.Visible = false
+		return
+	end
+	onboardingLabel.Text = text
+	onboardingLabel.Visible = true
+	onboardingToken += 1
+	local myToken = onboardingToken
+	task.delay(5, function()
+		if myToken == onboardingToken and onboardingLabel then
+			onboardingLabel.Visible = false
+		end
+	end)
+end
 
 function HudController.setRole(role: Types.Role?)
 	local function setGroup(names: { string }, visible: boolean)
@@ -303,6 +339,7 @@ function HudController.setRole(role: Types.Role?)
 	if statusLabel and role ~= Types.Role.Survivor then
 		statusLabel.Visible = false
 	end
+	showOnboarding(role) -- objectif du rôle, 5 s
 end
 
 function HudController.getButton(name: string): TextButton?
