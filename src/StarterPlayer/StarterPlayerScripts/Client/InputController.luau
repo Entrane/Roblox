@@ -8,6 +8,7 @@
 -- N'envoie que des INTENTIONS ; le serveur (PlayerService) tranche selon la
 -- stamina/batterie. On ne suppose donc jamais le succès localement.
 
+local Players = game:GetService("Players")
 local ContextActionService = game:GetService("ContextActionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
@@ -15,6 +16,8 @@ local Remotes = require(ReplicatedStorage.Remotes.RemotesManifest)
 local HudController = require(script.Parent.HudController)
 
 local InputController = {}
+
+local localPlayer = Players.LocalPlayer
 
 local SPRINT_ACTION = "SL_Sprint"
 local TORCH_ACTION = "SL_Torch"
@@ -34,9 +37,41 @@ local function stopSprint()
 	Remotes.SetSprinting:FireServer(false)
 end
 
+-- Feedback visuel LOCAL : une PointLight dans le HumanoidRootPart du joueur
+-- local. Créée côté client → NON répliquée (instance client sous un parent
+-- répliqué reste locale) : pas de Remote, c'est purement de l'affichage.
+-- ⚠️ MVP : la lumière suit l'intention client (toggle), pas l'état serveur
+-- autoritaire ; si la batterie se vide serveur-side, la lumière reste allumée
+-- jusqu'au prochain toggle (désync mineure assumée).
+local function setTorchLight(on: boolean)
+	local character = localPlayer.Character
+	if not character then
+		return
+	end
+	local hrp = character:FindFirstChild("HumanoidRootPart")
+	if not hrp then
+		return
+	end
+	local light = hrp:FindFirstChild("TorchLight")
+	if not light then
+		if not on then
+			return -- rien à éteindre
+		end
+		local pl = Instance.new("PointLight")
+		pl.Name = "TorchLight"
+		pl.Brightness = 2.5
+		pl.Range = 18
+		pl.Color = Color3.fromRGB(255, 244, 214)
+		pl.Parent = hrp
+		light = pl
+	end
+	(light :: PointLight).Enabled = on
+end
+
 local function toggleTorch()
 	torchOn = not torchOn
 	Remotes.SetTorch:FireServer(torchOn)
+	setTorchLight(torchOn) -- feedback visuel local
 end
 
 -- Sprint clavier : Begin = maintien, End/Cancel = relâche.
@@ -99,6 +134,7 @@ function InputController.deactivate()
 		torchOn = false
 		Remotes.SetTorch:FireServer(false)
 	end
+	setTorchLight(false) -- éteint la lumière locale dans tous les cas
 end
 
 return InputController

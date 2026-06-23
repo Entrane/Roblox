@@ -30,6 +30,7 @@ local statsFrame: Frame? = nil -- conteneur barres (survivant)
 local staminaFill: Frame? = nil
 local batteryFill: Frame? = nil
 local statusLabel: TextLabel? = nil -- "À TERRE / MORT / ÉVADÉ"
+local resultLabel: TextLabel? = nil -- écran de fin (phase Resolved)
 
 -- État local du timer (resync sur chaque RoundState, décompté entre les pushes).
 local roundPhase: Types.RoundPhase = Types.RoundPhase.Lobby
@@ -139,6 +140,29 @@ local function setStatus(lifeState: Types.PlayerLifeState)
 	end
 end
 
+-- Écran de fin : affiché UNIQUEMENT en phase Resolved, masqué partout ailleurs.
+-- winner est garanti non-nil en Resolved (invariant RoundManager.getState).
+local function refreshResult(winner: Types.Faction?)
+	if not resultLabel then
+		return
+	end
+	if roundPhase == Types.RoundPhase.Resolved then
+		if winner == Types.Faction.Survivors then
+			resultLabel.Text = "Les survivants s'échappent !"
+		elseif winner == Types.Faction.Echo then
+			resultLabel.Text = "L'Écho l'emporte."
+		else
+			resultLabel.Text = ""
+		end
+		resultLabel.Visible = resultLabel.Text ~= ""
+		if statusLabel then
+			statusLabel.Visible = false -- l'écran de fin prime sur le statut courant
+		end
+	else
+		resultLabel.Visible = false
+	end
+end
+
 -- ───────────────────────────────────────────────────────────────────────
 -- Abonnements aux Remotes HUD
 -- ───────────────────────────────────────────────────────────────────────
@@ -150,6 +174,7 @@ local function onRoundState(state: Types.RoundState)
 	roundPhase = state.phase
 	localTime = state.timeRemaining -- resync (le Heartbeat décompte entre deux pushes)
 	refreshRoundLabel()
+	refreshResult(state.winner)
 end
 
 local function onFuseProgress(progress: Types.FuseProgress)
@@ -235,6 +260,14 @@ function HudController.init()
 	status.Visible = false
 	status.Parent = gui
 	statusLabel = status
+
+	-- Écran de fin (centre, plus grand) : qui a gagné. Tous rôles (RoundState
+	-- est FireAllClients). Masqué hors Resolved.
+	local result = makeLabel("Result", UDim2.new(0.5, -260, 0.4, -40), UDim2.fromOffset(520, 80))
+	result.TextColor3 = Color3.fromRGB(255, 235, 160)
+	result.Visible = false
+	result.Parent = gui
+	resultLabel = result
 
 	screenGui = gui
 
