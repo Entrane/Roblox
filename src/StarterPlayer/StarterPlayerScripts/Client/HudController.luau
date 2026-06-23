@@ -33,6 +33,7 @@ local statusLabel: TextLabel? = nil -- "À TERRE / MORT / ÉVADÉ"
 local resultLabel: TextLabel? = nil -- écran de fin (phase Resolved)
 local onboardingLabel: TextLabel? = nil -- objectif affiché 5 s au démarrage
 local onboardingToken = 0 -- invalide un timer d'onboarding obsolète (changement de rôle)
+local phaseCenterLabel: TextLabel? = nil -- centre : attente lobby / décompte Starting
 
 -- État local du timer (resync sur chaque RoundState, décompté entre les pushes).
 local roundPhase: Types.RoundPhase = Types.RoundPhase.Lobby
@@ -121,6 +122,20 @@ end
 local function refreshRoundLabel()
 	if roundLabel then
 		roundLabel.Text = formatRound()
+	end
+	-- Affichage central selon la phase (lobby/attente, décompte de départ).
+	-- Mis à jour à chaque push RoundState ET à chaque Heartbeat (décompte fluide
+	-- de Starting), donc resync + fluidité comme le timer Playing.
+	if phaseCenterLabel then
+		if roundPhase == Types.RoundPhase.Lobby then
+			phaseCenterLabel.Text = "En attente de joueurs..."
+			phaseCenterLabel.Visible = true
+		elseif roundPhase == Types.RoundPhase.Starting then
+			phaseCenterLabel.Text = string.format("Départ dans %ds", math.max(0, math.ceil(localTime)))
+			phaseCenterLabel.Visible = true
+		else
+			phaseCenterLabel.Visible = false -- Playing (onboarding) / Resolved (résultat)
+		end
 	end
 end
 
@@ -269,6 +284,15 @@ function HudController.init()
 	onboarding.Visible = false
 	onboarding.Parent = gui
 	onboardingLabel = onboarding
+
+	-- Affichage central de phase (attente lobby / décompte de départ). Centré,
+	-- discret. Ne coexiste pas dans le temps avec onboarding (Playing) / résultat
+	-- (Resolved) — affiché seulement en Lobby/Starting.
+	local phaseCenter = makeLabel("PhaseCenter", UDim2.new(0.5, -250, 0.4, -20), UDim2.fromOffset(500, 40))
+	phaseCenter.BackgroundTransparency = 0.7
+	phaseCenter.Visible = false
+	phaseCenter.Parent = gui
+	phaseCenterLabel = phaseCenter
 
 	-- Écran de fin (centre, plus grand) : qui a gagné. Tous rôles (RoundState
 	-- est FireAllClients). Masqué hors Resolved.
