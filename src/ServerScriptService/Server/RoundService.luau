@@ -31,8 +31,13 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local RoundManager = require(ServerStorage.Logic.RoundManager)
 local Types = require(ReplicatedStorage.Shared.Types)
+local Remotes = require(ReplicatedStorage.Remotes.RemotesManifest)
 
 local RoundService = {}
+
+-- Réplication HUD : RoundState (phase/timer/winner) poussé à TOUS, throttlé.
+local HUD_INTERVAL = 0.1 -- s (~10 Hz)
+local hudAccum = 0
 
 -- Instance UNIQUE partagée (pas un singleton global au sens Lua — juste une
 -- upvalue de module, comme RoundManager.new() le permet pour les tests). Les
@@ -120,6 +125,17 @@ local function tick(dt: number)
 
 	if current ~= previous then
 		onPhaseChanged(previous, current)
+		-- HUD : transition de phase répliquée IMMÉDIATEMENT (phase/winner snappy).
+		Remotes.RoundState:FireAllClients(roundManager:getState())
+		hudAccum = 0
+	end
+
+	-- HUD : push throttlé du RoundState (le client décompte le timer en local
+	-- entre deux pushes et resync ici). Poussé dans TOUTES les phases (lobby inclus).
+	hudAccum += dt
+	if hudAccum >= HUD_INTERVAL then
+		hudAccum -= HUD_INTERVAL
+		Remotes.RoundState:FireAllClients(roundManager:getState())
 	end
 end
 

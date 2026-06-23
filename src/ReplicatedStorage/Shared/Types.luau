@@ -43,6 +43,16 @@ export type PlayerState = {
 	reviveProgress: number, -- progression de réanimation 0 .. GameConfig.Revive.Duration
 }
 
+-- Charge HUD poussée serveur→client à CHAQUE survivant (Remote PlayerHud, FireClient) :
+-- le strict nécessaire à ses barres + son propre statut. `lifeState` permet au
+-- client d'afficher « À TERRE / MORT / ÉVADÉ » (feedback de son propre état).
+-- Anti-triche : un joueur ne reçoit QUE le sien, jamais celui d'un autre.
+export type HudPlayerState = {
+	stamina: number, -- 0 .. GameConfig.Stamina.Max
+	battery: number, -- 0 .. GameConfig.Torch.BatteryMax
+	lifeState: PlayerLifeState, -- pour le feedback d'état du joueur lui-même
+}
+
 -- ═══════════════════════════════════════════════════════════════════════
 -- RÔLES (PvP 4v1)
 -- ═══════════════════════════════════════════════════════════════════════

@@ -38,10 +38,15 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local FuseSystem = require(ServerStorage.Logic.FuseSystem)
 local Types = require(ReplicatedStorage.Shared.Types)
 local GameConfig = require(ReplicatedStorage.Shared.GameConfig)
+local Remotes = require(ReplicatedStorage.Remotes.RemotesManifest)
 local RoundService = require(script.Parent.RoundService)
 local PlayerService = require(script.Parent.PlayerService)
 
 local FuseService = {}
+
+-- Réplication HUD : FuseProgress (x/5) poussé à TOUS, throttlé, pendant Playing.
+local HUD_INTERVAL = 0.1 -- s (~10 Hz)
+local hudAccum = 0
 
 -- Debounce d'évasion (Touched est bruyant) : userId -> os.clock du dernier
 -- traitement. ~0.5 s, EN PLUS du garde Alive.
@@ -447,13 +452,20 @@ end
 -- Tick serveur
 -- ───────────────────────────────────────────────────────────────────────
 
-local function tick(_dt: number)
+local function tick(dt: number)
 	resolvePhase()
 	if RoundService.getRoundManager():getPhase() ~= Types.RoundPhase.Playing then
 		return
 	end
 	resolveReleases()
 	reconcileVisuals()
+
+	-- HUD : push throttlé du compteur x/5 (pendant Playing seulement).
+	hudAccum += dt
+	if hudAccum >= HUD_INTERVAL then
+		hudAccum -= HUD_INTERVAL
+		Remotes.FuseProgress:FireAllClients(fuseSystem:getProgress())
+	end
 end
 
 -- ───────────────────────────────────────────────────────────────────────

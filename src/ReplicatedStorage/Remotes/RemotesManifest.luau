@@ -57,6 +57,11 @@ local EVENT_NAMES = {
 	"Echolocation", -- (pings: {Types.EcholocationPing}) — au SEUL client Écho, au pulse
 	"EchoState", -- (state: Types.EchoState) — au SEUL client Écho, jauges HUD
 	"AssignRole", -- (role: Types.Role) — au joueur concerné, au démarrage de manche
+
+	-- ── Serveur → client (HUD, ~10 Hz throttlé) ──
+	"RoundState", -- (state: Types.RoundState) — FireAllClients ; phase/timer/winner
+	"FuseProgress", -- (progress: Types.FuseProgress) — FireAllClients ; x/5
+	"PlayerHud", -- (state: Types.HudPlayerState) — FireClient au SEUL joueur concerné
 }
 
 -- Trouve le RemoteEvent ; le crée côté serveur, l'attend côté client.
@@ -86,6 +91,10 @@ export type Remotes = {
 	Echolocation: RemoteEvent,
 	EchoState: RemoteEvent,
 	AssignRole: RemoteEvent,
+	-- Serveur → client (HUD)
+	RoundState: RemoteEvent,
+	FuseProgress: RemoteEvent,
+	PlayerHud: RemoteEvent,
 }
 
 local Remotes = {} :: Remotes

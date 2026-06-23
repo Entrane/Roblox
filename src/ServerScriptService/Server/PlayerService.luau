@@ -303,6 +303,11 @@ end
 -- Tick serveur
 -- ───────────────────────────────────────────────────────────────────────
 
+-- Réplication HUD : PlayerHud poussé à CHAQUE survivant inscrit (son propre
+-- état), throttlé. L'Écho n'est pas inscrit → ne reçoit jamais PlayerHud.
+local HUD_INTERVAL = 0.1 -- s (~10 Hz)
+local hudAccum = 0
+
 local function tick(dt: number)
 	-- 1) Reset éventuel à l'entrée en Playing (lecture de la phase RoundService).
 	resolvePhase()
@@ -314,8 +319,15 @@ local function tick(dt: number)
 	-- 3) Avance la logique pure (stamina / batterie / réanimation / saignement).
 	playerState:update(dt)
 
+	-- HUD : fenêtre de push throttlée, calculée une fois pour toute la boucle.
+	hudAccum += dt
+	local pushHud = hudAccum >= HUD_INTERVAL
+	if pushHud then
+		hudAccum -= HUD_INTERVAL
+	end
+
 	-- 4) Détection des transitions de lifeState (PlayerState passif) + traduction
-	--    de l'état en effets monde (WalkSpeed selon stamina).
+	--    de l'état en effets monde (WalkSpeed selon stamina). + push HUD par survivant.
 	for _, player in Players:GetPlayers() do
 		local userId = player.UserId
 		local snapshot = playerState:getState(userId)
@@ -326,6 +338,15 @@ local function tick(dt: number)
 			end
 			lastLife[userId] = snapshot.lifeState
 			applyMovement(userId, snapshot)
+
+			-- PlayerHud : seulement le SIEN (FireClient), charge minimale.
+			if pushHud then
+				Remotes.PlayerHud:FireClient(player, {
+					stamina = snapshot.stamina,
+					battery = snapshot.battery,
+					lifeState = snapshot.lifeState,
+				})
+			end
 		end
 	end
 
