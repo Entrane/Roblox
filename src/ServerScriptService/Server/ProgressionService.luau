@@ -29,8 +29,10 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local DataStoreService = game:GetService("DataStoreService")
+local ServerStorage = game:GetService("ServerStorage")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
+local StatsAggregator = require(ServerStorage.Logic.StatsAggregator)
 local Types = require(ReplicatedStorage.Shared.Types)
 local Remotes = require(ReplicatedStorage.Remotes.RemotesManifest)
 local RoundService = require(script.Parent.RoundService)
@@ -92,7 +94,10 @@ end
 -- État de module
 -- ───────────────────────────────────────────────────────────────────────
 
-type XpData = { totalXp: number, unlockedTitles: { string }, activeTitle: string? }
+-- Record « profil » persisté dans PlayerXP_v1 : XP + titres + stats à vie. Les
+-- stats sont bundlées ici (et pas dans un store séparé) car elles changent au
+-- MÊME instant que l'XP (au Resolved) → un seul UpdateAsync (budget DataStore).
+type XpData = { totalXp: number, unlockedTitles: { string }, activeTitle: string?, stats: StatsAggregator.LifetimeStats }
 type QuestData = { date: string, gamesPlayed: number, q1Done: boolean, q2Done: boolean, q3Done: boolean }
 
 local xpStore = DataStoreService:GetDataStore(XP_STORE)
@@ -189,6 +194,48 @@ end
 -- DataStore (toujours en pcall)
 -- ───────────────────────────────────────────────────────────────────────
 
+-- leaderstats natifs (Tab) : Niveau, Victoires, K/D. Créés une fois le profil
+-- chargé, rafraîchis après chaque manche. Parentés au Player → auto-détruits au
+-- départ (aucun nettoyage manuel). API Roblox pure : la logique de VALEURS vit
+-- dans StatsAggregator (testée) ; ici on ne fait que peupler des *Value.
+local function updateLeaderstats(player: Player, uid: number)
+	local cache = xpCache[uid]
+	if not cache then
+		return
+	end
+	local folder = player:FindFirstChild("leaderstats")
+	if not folder then
+		folder = Instance.new("Folder")
+		folder.Name = "leaderstats"
+		local level = Instance.new("IntValue")
+		level.Name = "Niveau"
+		level.Parent = folder
+		local wins = Instance.new("IntValue")
+		wins.Name = "Victoires"
+		wins.Parent = folder
+		local kd = Instance.new("NumberValue")
+		kd.Name = "K/D"
+		kd.Parent = folder
+		folder.Parent = player
+	end
+	-- Cast au FindFirstChild (et non sur la ligne d'affectation) : évite le « (… ) »
+	-- en tête d'instruction (syntaxe ambiguë Luau) et garde des accès typés.
+	local levelV = folder:FindFirstChild("Niveau") :: IntValue?
+	local winsV = folder:FindFirstChild("Victoires") :: IntValue?
+	local kdV = folder:FindFirstChild("K/D") :: NumberValue?
+	if levelV then
+		levelV.Value = levelFromXp(cache.totalXp)
+	end
+	if winsV then
+		winsV.Value = cache.stats.survivorWins + cache.stats.echoWins
+	end
+	if kdV then
+		-- Arrondi 2 décimales pour un affichage Tab lisible.
+		local r = StatsAggregator.kdRatio(cache.stats)
+		kdV.Value = math.floor(r * 100 + 0.5) / 100
+	end
+end
+
 local function loadPlayer(player: Player)
 	local uid = player.UserId
 	local key = tostring(uid)
@@ -222,7 +269,9 @@ local function loadPlayer(player: Player)
 	if activeTitle == nil or not table.find(titles, activeTitle) then
 		activeTitle = lastUnlockedTitle(titles)
 	end
-	xpCache[uid] = { totalXp = totalXp, unlockedTitles = titles, activeTitle = activeTitle }
+	-- Stats à vie : sanitées (record legacy sans `stats` → tout à zéro).
+	local lifeStats = StatsAggregator.sanitize(if ok and type(data) == "table" then data.stats else nil)
+	xpCache[uid] = { totalXp = totalXp, unlockedTitles = titles, activeTitle = activeTitle, stats = lifeStats }
 
 	local ok2, qdata = pcall(function()
 		return questStore:GetAsync(key)
@@ -246,6 +295,7 @@ local function loadPlayer(player: Player)
 	questCache[uid] = q
 
 	sendQuestState(player, uid) -- le client a son état de quêtes dès l'arrivée
+	updateLeaderstats(player, uid) -- Tab peuplé dès l'arrivée (Niveau/Victoires/K/D)
 end
 
 -- force = true : sauvegarde TOUJOURS (PlayerRemoving / BindToClose, anti-perte).
@@ -280,7 +330,9 @@ local function savePlayer(uid: number, force: boolean?)
 					end
 				end
 				mergeTitles(merged, xp.unlockedTitles)
-				return { totalXp = math.max(prev, xp.totalXp), unlockedTitles = merged, activeTitle = xp.activeTitle }
+				-- Stats : max champ par champ (anti-régression, comme totalXp).
+				local mergedStats = StatsAggregator.merge(if type(old) == "table" then old.stats else nil, xp.stats)
+				return { totalXp = math.max(prev, xp.totalXp), unlockedTitles = merged, activeTitle = xp.activeTitle, stats = mergedStats }
 			end)
 		end)
 	end
@@ -333,6 +385,7 @@ type Snap = {
 	matchXp: number,
 	escaped: boolean,
 	isEcho: boolean,
+	died: boolean, -- a fini Dead (pour la stat à vie ; pas Escaped/Downed)
 	breakdown: Types.XpBreakdown,
 	roundStats: Types.RoundStats,
 }
@@ -371,6 +424,7 @@ local function onResolved()
 		local uid = player.UserId
 		local lifeSnap = playerState:getState(uid)
 		local escaped = lifeSnap ~= nil and lifeSnap.lifeState == Types.LifeState.Escaped
+		local died = lifeSnap ~= nil and lifeSnap.lifeState == Types.LifeState.Dead
 		local isEcho = echoId ~= nil and uid == echoId
 
 		local nDeposits = deposits[uid] or 0
@@ -389,6 +443,7 @@ local function onResolved()
 			matchXp = matchXp,
 			escaped = escaped,
 			isEcho = isEcho,
+			died = died,
 			breakdown = {
 				participation = XP_PARTICIPATION,
 				escaped = xpEscaped,
@@ -429,6 +484,15 @@ local function onResolved()
 					cache.activeTitle = newTitles[#newTitles]
 				end
 
+				-- Stats à vie : applique l'issue de la manche (avant le save, qui les persiste).
+				cache.stats = StatsAggregator.apply(cache.stats, {
+					escaped = s.escaped,
+					isEcho = s.isEcho,
+					echoWon = winner == Types.Faction.Echo,
+					kills = s.roundStats.kills,
+					died = s.died,
+				})
+
 				Remotes.XpResult:FireClient(s.player, {
 					xp = cache.totalXp,
 					level = newLevel,
@@ -444,6 +508,7 @@ local function onResolved()
 				})
 				sendQuestState(s.player, s.uid)
 				savePlayer(s.uid)
+				updateLeaderstats(s.player, s.uid) -- Tab rafraîchi (Niveau/Victoires/K/D)
 			end
 		end
 	end)
