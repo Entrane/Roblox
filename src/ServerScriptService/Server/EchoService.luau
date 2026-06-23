@@ -276,6 +276,33 @@ end
 -- Pilotage IA (EntityAI = navigation + frappe ; EchoController dormant en MVP)
 -- ───────────────────────────────────────────────────────────────────────
 
+-- Patrouille : cycle entre les FuseSpots de la map. Avance vers le point courant,
+-- passe au suivant une fois proche (~6 studs). La liste est résolue une fois.
+local patrolPoints: { Vector3 } = {}
+local patrolIndex = 1
+local function nextPatrolTarget(fromPos: Vector3): Vector3?
+	if #patrolPoints == 0 then
+		local map = Workspace:FindFirstChild("Map")
+		local spots = map and map:FindFirstChild("FuseSpots")
+		if spots then
+			for _, part in spots:GetChildren() do
+				if part:IsA("BasePart") then
+					table.insert(patrolPoints, part.Position)
+				end
+			end
+		end
+		if #patrolPoints == 0 then
+			return nil
+		end
+	end
+	local target = patrolPoints[patrolIndex]
+	if (target - fromPos).Magnitude <= 6 then
+		patrolIndex = (patrolIndex % #patrolPoints) + 1
+		target = patrolPoints[patrolIndex]
+	end
+	return target
+end
+
 local function tickAI(dt: number)
 	local ai = entityAI
 	if not ai then
@@ -292,10 +319,25 @@ local function tickAI(dt: number)
 	local obs = buildObservations(entityRoot.Position, "onContact", { entityRoot.Parent :: Instance })
 	local hit, abilityRequest = ai:update(dt, obs)
 
-	-- ⚠️ À VALIDER DANS STUDIO : déplacement réel du corps (MoveTo/pathfinding)
-	-- d'après ai:getState() (lastKnownPosition + phase → PatrolSpeed/ChaseSpeed),
-	-- avec multiplicateur de Frénésie lu sur echoController:getState().frenzy
-	-- (activeRemaining > 0). Branchement minimal : on laisse le mouvement à Studio.
+	-- ─── Déplacement réel du corps (MoveTo) ─────────────────
+	-- Vitesse = PatrolSpeed/ChaseSpeed selon la phase, ×Frénésie si active.
+	-- Cible = lastKnownPosition (Chase/Search/Attack) sinon point de patrouille.
+	local humanoid = (entityRoot.Parent :: Instance):FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		local state = ai:getState()
+		local chasing = state.phase == Types.EntityPhase.Chase
+			or state.phase == Types.EntityPhase.Attack
+		local speed = if chasing then GameConfig.Entity.ChaseSpeed else GameConfig.Entity.PatrolSpeed
+		if echoController and echoController:getState().frenzy.activeRemaining > 0 then
+			speed = speed * GameConfig.Echo.Frenzy.SpeedMultiplier
+		end
+		humanoid.WalkSpeed = speed
+
+		local target: Vector3? = state.lastKnownPosition or nextPatrolTarget(entityRoot.Position)
+		if target then
+			humanoid:MoveTo(target)
+		end
+	end
 
 	-- Hook capacités IA : EntityAI a décidé (Frenzy en Chase, Howl en Search) ;
 	-- requestAbility est le GARDIEN du cooldown (ignore si indispo) → EntityAI
