@@ -65,6 +65,10 @@ local questStore = DataStoreService:GetDataStore(QUEST_STORE)
 local xpCache: { [number]: XpData } = {}
 local questCache: { [number]: QuestData } = {}
 
+-- Anti-spam DataStore : 1 save max / 30 s / joueur (sauf force = départ/shutdown).
+local SAVE_COOLDOWN = 30 -- s
+local lastSaveAt: { [number]: number } = {} -- userId -> os.clock du dernier save
+
 local lastPhase: Types.RoundPhase = RoundService.getRoundManager():getPhase()
 local initialized = false
 
@@ -154,7 +158,18 @@ local function loadPlayer(player: Player)
 	sendQuestState(player, uid) -- le client a son état de quêtes dès l'arrivée
 end
 
-local function savePlayer(uid: number)
+-- force = true : sauvegarde TOUJOURS (PlayerRemoving / BindToClose, anti-perte).
+-- Sinon : throttlé (anti-spam). La mémoire reste autoritaire → un save sauté est
+-- rattrapé au prochain save non throttlé ou au départ.
+local function savePlayer(uid: number, force: boolean?)
+	if not force then
+		local last = lastSaveAt[uid]
+		if last and (os.clock() - last) < SAVE_COOLDOWN then
+			return
+		end
+	end
+	lastSaveAt[uid] = os.clock()
+
 	local key = tostring(uid)
 	local xp = xpCache[uid]
 	local q = questCache[uid]
@@ -341,15 +356,16 @@ function ProgressionService.init()
 	end)
 	Players.PlayerRemoving:Connect(function(player)
 		local uid = player.UserId
-		savePlayer(uid) -- anti-perte au départ
+		savePlayer(uid, true) -- TOUJOURS au départ (anti-perte, ignore le throttle)
 		xpCache[uid] = nil
 		questCache[uid] = nil
+		lastSaveAt[uid] = nil
 	end)
 
-	-- Sauvegarde de tous les joueurs à l'arrêt du serveur (anti-perte).
+	-- Sauvegarde de tous les joueurs à l'arrêt du serveur (anti-perte, forcée).
 	game:BindToClose(function()
 		for uid in xpCache do
-			savePlayer(uid)
+			savePlayer(uid, true)
 		end
 	end)
 
