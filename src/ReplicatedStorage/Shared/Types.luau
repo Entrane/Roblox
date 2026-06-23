@@ -272,12 +272,13 @@ export type Quest = {
 }
 
 -- Payload QuestState (FireClient, au chargement + après chaque manche). Porte
--- aussi le niveau et le titre actif → le lobby les affiche sans attendre un
--- XpResult (qui n'arrive qu'en fin de manche).
+-- aussi le niveau, le titre actif ET la liste des titres débloqués → le lobby
+-- les affiche et propose le choix manuel du titre, sans attendre un XpResult.
 export type QuestState = {
 	quests: { Quest },
 	level: number,
 	activeTitle: string?,
+	unlockedTitles: { string }, -- titres possédés (pour le panneau de sélection)
 }
 
 -- Une ligne du leaderboard de fin de manche. `name` = DisplayName résolu côté

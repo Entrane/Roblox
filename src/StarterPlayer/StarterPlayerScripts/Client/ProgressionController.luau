@@ -39,6 +39,15 @@ type LbRow = { frame: Frame, label: TextLabel, stroke: UIStroke }
 local lbRows: { LbRow } = {}
 local LB_MAX_ROWS = 5
 
+-- Panneau « Titres » (lobby) : sélection manuelle du titre actif.
+local titlesPanel: Frame? = nil
+local titlesScroll: ScrollingFrame? = nil
+local titleButtons: { TextButton } = {}
+local titleFlashLabel: TextLabel? = nil
+local lastActiveTitle: string? = nil -- pour détecter un changement (flash)
+local titlesInitialized = false -- pas de flash au tout premier QuestState
+local flashToken = 0 -- invalide un flash obsolète (sélections rapprochées)
+
 -- ───────────────────────────────────────────────────────────────────────
 -- Fabriques
 -- ───────────────────────────────────────────────────────────────────────
@@ -57,6 +66,63 @@ local function makeLabel(parent: Instance, pos: UDim2, size: UDim2, scaled: bool
 end
 
 -- ───────────────────────────────────────────────────────────────────────
+-- Titres : reconstruction des boutons + flash de confirmation
+-- ───────────────────────────────────────────────────────────────────────
+
+-- Flash transitoire « ✓ Titre équipé » (~1,5 s). Le token invalide un flash
+-- précédent si l'on enchaîne les sélections (pas de clignotement résiduel).
+local function showTitleFlash()
+	if not titleFlashLabel then
+		return
+	end
+	flashToken += 1
+	local myToken = flashToken
+	titleFlashLabel.Text = "✓ Titre équipé"
+	titleFlashLabel.Visible = true
+	task.delay(1.5, function()
+		if flashToken == myToken and titleFlashLabel then
+			titleFlashLabel.Visible = false
+		end
+	end)
+end
+
+-- Reconstruit la liste de boutons depuis les titres possédés ; surligne l'actif.
+-- Chaque bouton émet SetActiveTitle (revalidé serveur). On reconstruit à chaque
+-- QuestState (la liste peut grandir) : simple et sûr (≤ ~10 titres).
+local function rebuildTitles(unlocked: { string }, active: string?)
+	local scroll = titlesScroll
+	if not scroll then
+		return
+	end
+	for _, b in titleButtons do
+		b:Destroy()
+	end
+	table.clear(titleButtons)
+	local count = 0
+	for _, t in unlocked do
+		count += 1
+		local btn = Instance.new("TextButton")
+		btn.Name = "Title_" .. count
+		btn.Size = UDim2.new(1, -8, 0, 28)
+		btn.BackgroundColor3 = if t == active then Color3.fromRGB(45, 90, 60) else Color3.fromRGB(40, 40, 48)
+		btn.BackgroundTransparency = 0.2
+		btn.BorderSizePixel = 0
+		btn.TextColor3 = Color3.fromRGB(235, 235, 235)
+		btn.TextScaled = false
+		btn.TextSize = 15
+		btn.Text = t
+		btn.Parent = scroll
+		local captured = t
+		btn.Activated:Connect(function()
+			Remotes.SetActiveTitle:FireServer(captured)
+		end)
+		table.insert(titleButtons, btn)
+	end
+	-- CanvasSize = hauteur du contenu (28 + 4 de padding par ligne).
+	scroll.CanvasSize = UDim2.fromOffset(0, count * 32)
+end
+
+-- ───────────────────────────────────────────────────────────────────────
 -- Handlers Remotes
 -- ───────────────────────────────────────────────────────────────────────
 
@@ -64,8 +130,12 @@ local function onRoundState(state: Types.RoundState)
 	if type(state) ~= "table" then
 		return
 	end
+	local inLobby = state.phase == Types.RoundPhase.Lobby or state.phase == Types.RoundPhase.Starting
 	if questPanel then
-		questPanel.Visible = state.phase == Types.RoundPhase.Lobby or state.phase == Types.RoundPhase.Starting
+		questPanel.Visible = inLobby
+	end
+	if titlesPanel then
+		titlesPanel.Visible = inLobby -- choix du titre : lobby seulement
 	end
 	-- Le leaderboard n'a de sens qu'en Resolved : on le masque dès qu'on en sort.
 	if leaderboardPanel and state.phase ~= Types.RoundPhase.Resolved then
@@ -99,6 +169,16 @@ local function onQuestState(state: Types.QuestState)
 			line.Text = ""
 		end
 	end
+
+	-- Titres : reconstruit la liste + surligne l'actif. Flash de confirmation si
+	-- le titre actif a CHANGÉ (hors tout premier état = chargement initial).
+	local unlocked: { string } = if type(state.unlockedTitles) == "table" then state.unlockedTitles else {}
+	rebuildTitles(unlocked, state.activeTitle)
+	if titlesInitialized and state.activeTitle ~= lastActiveTitle then
+		showTitleFlash()
+	end
+	lastActiveTitle = state.activeTitle
+	titlesInitialized = true
 end
 
 local function onXpResult(result: Types.XpResult)
@@ -225,6 +305,45 @@ function ProgressionController.init()
 		questLines[i].TextScaled = false
 		questLines[i].TextSize = 16
 	end
+
+	-- Panneau « Titres » (gauche, sous les quêtes, Lobby/Starting) : choix manuel.
+	local titles = Instance.new("Frame")
+	titles.Name = "Titles"
+	titles.Size = UDim2.fromOffset(360, 168)
+	titles.Position = UDim2.fromOffset(12, 284)
+	titles.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+	titles.BackgroundTransparency = 0.45
+	titles.Visible = false
+	titles.Parent = gui
+	titlesPanel = titles
+
+	local titlesTitle = makeLabel(titles, UDim2.fromOffset(8, 4), UDim2.fromOffset(260, 26), true)
+	titlesTitle.Text = "Titres"
+	titlesTitle.TextColor3 = Color3.fromRGB(255, 235, 160)
+
+	-- Flash de confirmation (à droite du titre du panneau).
+	titleFlashLabel = makeLabel(titles, UDim2.fromOffset(200, 6), UDim2.fromOffset(152, 22), false)
+	titleFlashLabel.TextSize = 15
+	titleFlashLabel.TextXAlignment = Enum.TextXAlignment.Right
+	titleFlashLabel.TextColor3 = Color3.fromRGB(120, 230, 120)
+	titleFlashLabel.Visible = false
+
+	-- Liste défilante des titres possédés (boutons reconstruits à chaque QuestState).
+	local scroll = Instance.new("ScrollingFrame")
+	scroll.Name = "TitleList"
+	scroll.Size = UDim2.fromOffset(344, 128)
+	scroll.Position = UDim2.fromOffset(8, 34)
+	scroll.BackgroundTransparency = 1
+	scroll.BorderSizePixel = 0
+	scroll.ScrollBarThickness = 6
+	scroll.CanvasSize = UDim2.fromOffset(0, 0)
+	scroll.Parent = titles
+	titlesScroll = scroll
+
+	local layout = Instance.new("UIListLayout")
+	layout.Padding = UDim.new(0, 4)
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Parent = scroll
 
 	-- Écran XP de fin (BAS-centre) : tes gains perso, sous le leaderboard central.
 	local xp = Instance.new("Frame")

@@ -34,6 +34,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local StatsAggregator = require(ServerStorage.Logic.StatsAggregator)
 local LeaderboardBuilder = require(ServerStorage.Logic.LeaderboardBuilder)
+local TitleManager = require(ServerStorage.Logic.TitleManager)
+local RateLimiter = require(ServerStorage.Logic.RateLimiter)
 local Types = require(ReplicatedStorage.Shared.Types)
 local Remotes = require(ReplicatedStorage.Remotes.RemotesManifest)
 local RoundService = require(script.Parent.RoundService)
@@ -63,10 +65,10 @@ local XP_STORE = "PlayerXP_v1"
 local QUEST_STORE = "DailyQuests_v1"
 
 -- Paliers de récompense. rewardType = "title" uniquement pour le MVP (cf. TODO
--- skins en tête de fichier). Triés par niveau croissant (getMilestoneRewards et
--- le backfill de migration s'appuient sur cet ordre).
-type Milestone = { level: number, rewardType: string, rewardValue: string }
-local MILESTONES: { Milestone } = {
+-- skins en tête de fichier). Triés par niveau croissant : TitleManager
+-- (getMilestoneRewards/lastUnlockedTitle) s'appuie sur cet ordre. La table reste
+-- ICI (config) ; TitleManager la reçoit en paramètre (module pur agnostique).
+local MILESTONES: { TitleManager.Milestone } = {
 	{ level = 1, rewardType = "title", rewardValue = "Nouveau Venu" },
 	{ level = 3, rewardType = "title", rewardValue = "Recrue du Bunker" },
 	{ level = 5, rewardType = "title", rewardValue = "Survivant Endurci" },
@@ -78,18 +80,6 @@ local MILESTONES: { Milestone } = {
 	{ level = 30, rewardType = "title", rewardValue = "Spectre du Signal" },
 	{ level = 40, rewardType = "title", rewardValue = "Légende de Signal Lost" },
 }
-
--- Pure : titres (rewardValue) débloqués en passant STRICTEMENT de oldLevel à
--- newLevel (oldLevel < palier <= newLevel). Vide si pas de montée de palier.
-local function getMilestoneRewards(oldLevel: number, newLevel: number): { string }
-	local rewards: { string } = {}
-	for _, m in MILESTONES do
-		if m.rewardType == "title" and m.level > oldLevel and m.level <= newLevel then
-			table.insert(rewards, m.rewardValue)
-		end
-	end
-	return rewards
-end
 
 -- ───────────────────────────────────────────────────────────────────────
 -- État de module
@@ -114,6 +104,10 @@ local lastSaveAt: { [number]: number } = {} -- userId -> os.clock du dernier sav
 local lastPhase: Types.RoundPhase = RoundService.getRoundManager():getPhase()
 local initialized = false
 
+-- Anti-flood de SetActiveTitle (cohérence #6 : garde token bucket par joueur).
+local rateLimiter: RateLimiter.RateLimiter = RateLimiter.new()
+local IS_STUDIO = RunService:IsStudio()
+
 -- ───────────────────────────────────────────────────────────────────────
 -- Helpers
 -- ───────────────────────────────────────────────────────────────────────
@@ -126,37 +120,8 @@ local function levelFromXp(xp: number): number
 	return math.floor(xp / XP_PER_LEVEL) + 1
 end
 
--- Fusionne `additions` dans `titles` SANS doublon (préserve l'ordre d'arrivée).
--- Sert au backfill de migration et à l'union anti-perte au save.
-local function mergeTitles(titles: { string }, additions: { string })
-	local seen: { [string]: boolean } = {}
-	for _, t in titles do
-		seen[t] = true
-	end
-	for _, t in additions do
-		if not seen[t] then
-			seen[t] = true
-			table.insert(titles, t)
-		end
-	end
-end
-
--- Le titre actif par défaut (MVP) = le DERNIER débloqué = le palier le plus
--- élevé atteint. On parcourt MILESTONES (ordre croissant) et on retient le
--- dernier titre possédé. nil si aucun (ne devrait pas arriver, niveau 1 = palier).
-local function lastUnlockedTitle(titles: { string }): string?
-	local owned: { [string]: boolean } = {}
-	for _, t in titles do
-		owned[t] = true
-	end
-	local result: string? = nil
-	for _, m in MILESTONES do
-		if m.rewardType == "title" and owned[m.rewardValue] then
-			result = m.rewardValue
-		end
-	end
-	return result
-end
+-- mergeTitles / lastUnlockedTitle / getMilestoneRewards vivent désormais dans
+-- TitleManager (Logic pur, shim-testé) ; on les appelle avec MILESTONES.
 
 local function defaultQuests(): QuestData
 	return { date = todayUTC(), gamesPlayed = 0, q1Done = false, q2Done = false, q3Done = false }
@@ -184,6 +149,7 @@ local function buildQuestState(uid: number): Types.QuestState
 		},
 		level = if xp then levelFromXp(xp.totalXp) else 1,
 		activeTitle = if xp then xp.activeTitle else nil,
+		unlockedTitles = if xp then xp.unlockedTitles else {},
 	}
 end
 
@@ -265,10 +231,10 @@ local function loadPlayer(player: Player)
 	end
 	-- Migration / cohérence : un compte (legacy ou non) doit posséder TOUS les
 	-- titres mérités par son niveau actuel, même si le champ n'existait pas.
-	mergeTitles(titles, getMilestoneRewards(0, levelFromXp(totalXp)))
+	TitleManager.mergeTitles(titles, TitleManager.getMilestoneRewards(MILESTONES, 0, levelFromXp(totalXp)))
 	-- Auto-sélection MVP du titre actif s'il manque ou n'est plus possédé.
-	if activeTitle == nil or not table.find(titles, activeTitle) then
-		activeTitle = lastUnlockedTitle(titles)
+	if activeTitle == nil or not TitleManager.isOwned(titles, activeTitle) then
+		activeTitle = TitleManager.lastUnlockedTitle(MILESTONES, titles)
 	end
 	-- Stats à vie : sanitées (record legacy sans `stats` → tout à zéro).
 	local lifeStats = StatsAggregator.sanitize(if ok and type(data) == "table" then data.stats else nil)
@@ -330,7 +296,7 @@ local function savePlayer(uid: number, force: boolean?)
 						end
 					end
 				end
-				mergeTitles(merged, xp.unlockedTitles)
+				TitleManager.mergeTitles(merged, xp.unlockedTitles)
 				-- Stats : max champ par champ (anti-régression, comme totalXp).
 				local mergedStats = StatsAggregator.merge(if type(old) == "table" then old.stats else nil, xp.stats)
 				return { totalXp = math.max(prev, xp.totalXp), unlockedTitles = merged, activeTitle = xp.activeTitle, stats = mergedStats }
@@ -483,9 +449,9 @@ local function onResolved()
 				local newLevel = levelFromXp(cache.totalXp)
 				s.breakdown.quests = questReward
 
-				local newTitles = getMilestoneRewards(oldLevel, newLevel)
+				local newTitles = TitleManager.getMilestoneRewards(MILESTONES, oldLevel, newLevel)
 				if #newTitles > 0 then
-					mergeTitles(cache.unlockedTitles, newTitles)
+					TitleManager.mergeTitles(cache.unlockedTitles, newTitles)
 					-- Auto-sélection MVP : le plus haut palier franchi (dernier de la liste).
 					cache.activeTitle = newTitles[#newTitles]
 				end
@@ -542,6 +508,35 @@ local function onResolved()
 end
 
 -- ───────────────────────────────────────────────────────────────────────
+-- Choix manuel du titre actif (client → serveur, AUTORITÉ SERVEUR)
+-- ───────────────────────────────────────────────────────────────────────
+
+-- Identité = player (OnServerEvent). Anti-flood (rate limit) + validation
+-- « titre POSSÉDÉ » (TitleManager.isOwned) : on n'équipe jamais un titre non
+-- débloqué (le client n'affiche que les possédés → rejet = exploit). Sur succès :
+-- persiste + renvoie QuestState (confirmation autoritaire, le client met à jour l'UI).
+local function onSetActiveTitle(player: Player, title: any)
+	local uid = player.UserId
+	local allowed, firstRejection = rateLimiter:allow(uid, "SetActiveTitle", 4, 2, os.clock())
+	if not allowed then
+		if IS_STUDIO and firstRejection then
+			warn(string.format("[ProgressionService] Rate limit : SetActiveTitle rejeté (rafale) pour le joueur %d.", uid))
+		end
+		return
+	end
+	local cache = xpCache[uid]
+	if not cache then
+		return
+	end
+	if not TitleManager.isOwned(cache.unlockedTitles, title) then
+		return -- titre non possédé / charge invalide : ignoré
+	end
+	cache.activeTitle = title :: string
+	savePlayer(uid)
+	sendQuestState(player, uid) -- confirmation autoritaire (UI client resynchronisée)
+end
+
+-- ───────────────────────────────────────────────────────────────────────
 -- Tick : détecte l'entrée en Resolved
 -- ───────────────────────────────────────────────────────────────────────
 
@@ -577,7 +572,10 @@ function ProgressionService.init()
 		xpCache[uid] = nil
 		questCache[uid] = nil
 		lastSaveAt[uid] = nil
+		rateLimiter:removePlayer(uid) -- libère le seau anti-flood du joueur
 	end)
+
+	Remotes.SetActiveTitle.OnServerEvent:Connect(onSetActiveTitle)
 
 	-- Sauvegarde de tous les joueurs à l'arrêt du serveur (anti-perte, forcée).
 	game:BindToClose(function()
