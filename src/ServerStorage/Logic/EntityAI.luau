@@ -210,15 +210,41 @@ function EntityAI._enterAttack(self: EntityAI)
 end
 
 -- ───────────────────────────────────────────────────────────────────────
+-- Décision de capacité (PURE, statique) — isolée pour le test direct
+-- ───────────────────────────────────────────────────────────────────────
+
+-- À l'entrée d'une phase, quelle capacité l'IA DEMANDE-t-elle (intention pure) ?
+--   - Chase + cible visible ET hors de portée d'attaque → Frenzy (combler l'écart).
+--   - Search → Howl (le chasseur « hurle » en perdant la vue).
+--   - sinon nil.
+-- EntityAI N'A AUCUNE connaissance des cooldowns : c'est EchoController qui, en
+-- recevant la demande, l'ignore si la capacité est en cooldown/active (gardien
+-- unique). attackRange est passé en paramètre → fonction config-free, testable.
+function EntityAI.decideAbility(enteredPhase: Types.EntityPhase, targetVisible: boolean, distance: number, attackRange: number): Types.AbilityId?
+	if enteredPhase == Types.EntityPhase.Chase then
+		if targetVisible and distance > attackRange then
+			return Types.AbilityId.Frenzy
+		end
+		return nil
+	elseif enteredPhase == Types.EntityPhase.Search then
+		return Types.AbilityId.Howl
+	end
+	return nil
+end
+
+-- ───────────────────────────────────────────────────────────────────────
 -- update — SEUL point d'entrée par tick
 -- ───────────────────────────────────────────────────────────────────────
 
 -- À appeler à chaque tick serveur (uniquement pendant RoundManager.Playing --
 -- au Service de le garantir, EntityAI n'a aucune notion de manche). Avance la
 -- FSM, applique AU PLUS UNE transition par appel (même philosophie que
--- RoundManager.update), et renvoie le userId frappé CE TICK PRÉCIS, ou nil.
--- Au Service de réagir : appeler PlayerState.applyAttack(userId) si non nil.
-function EntityAI.update(self: EntityAI, dt: number, observations: { Types.EntityObservation }): number?
+-- RoundManager.update). Renvoie DEUX valeurs (toutes deux instantanées, non
+-- stockées) :
+--   1. userId frappé CE TICK (ou nil) → au Service d'appeler PlayerState.applyAttack ;
+--   2. capacité DEMANDÉE à l'entrée d'une phase (ou nil) → au Service d'appeler
+--      EchoController:requestAbility (qui gate le cooldown). Cf. decideAbility.
+function EntityAI.update(self: EntityAI, dt: number, observations: { Types.EntityObservation }): (number?, Types.AbilityId?)
 	-- Défensif : dt invalide -> 0 (n'avance pas les timers). observations
 	-- invalide (nil/pas une table) -> liste vide (aucun candidat ce tick).
 	local delta: number = if type(dt) == "number" and dt > 0 then dt else 0
@@ -231,20 +257,23 @@ function EntityAI.update(self: EntityAI, dt: number, observations: { Types.Entit
 
 	self.stateTimer += delta
 
+	local range = GameConfig.Entity.AttackRange
+	local abilityRequest: Types.AbilityId? = nil
 	local phase = self.phase
 
 	if phase == Types.EntityPhase.Patrol then
 		local target = selectTarget(obsList)
 		if target then
 			self:_enterChase(target.userId, target.position)
+			abilityRequest = EntityAI.decideAbility(Types.EntityPhase.Chase, target.visible, target.distance, range)
 		end
-		return nil
+		return nil, abilityRequest
 
 	elseif phase == Types.EntityPhase.Chase then
 		local current = findObservation(obsList, self.targetUserId)
 		if isTargetGone(current) then
 			self:_enterPatrol()
-			return nil
+			return nil, nil
 		end
 		local target = current :: Types.EntityObservation
 
@@ -257,39 +286,42 @@ function EntityAI.update(self: EntityAI, dt: number, observations: { Types.Entit
 			self.noContactTimer += delta
 		end
 
-		if target.visible and target.distance <= GameConfig.Entity.AttackRange then
+		if target.visible and target.distance <= range then
 			self:_enterAttack()
 		elseif self.noContactTimer >= GameConfig.Entity.LoseTargetTime then
 			self:_enterSearch()
+			abilityRequest = EntityAI.decideAbility(Types.EntityPhase.Search, false, 0, range)
 		end
-		return nil
+		return nil, abilityRequest
 
 	elseif phase == Types.EntityPhase.Search then
 		local current = findObservation(obsList, self.targetUserId)
 		if isTargetGone(current) then
 			self:_enterPatrol()
-			return nil
+			return nil, nil
 		end
 
 		local reacquired = selectTarget(obsList)
 		if reacquired then
 			self:_enterChase(reacquired.userId, reacquired.position)
+			abilityRequest = EntityAI.decideAbility(Types.EntityPhase.Chase, reacquired.visible, reacquired.distance, range)
 		elseif self.stateTimer >= GameConfig.Entity.SearchDuration then
 			self:_enterPatrol()
 		end
-		return nil
+		return nil, abilityRequest
 
 	elseif phase == Types.EntityPhase.Attack then
 		local current = findObservation(obsList, self.targetUserId)
 		if isTargetGone(current) then
 			self:_enterPatrol()
-			return nil
+			return nil, nil
 		end
 		local target = current :: Types.EntityObservation
 
-		if not target.visible or target.distance > GameConfig.Entity.AttackRange then
+		if not target.visible or target.distance > range then
 			self:_enterChase(target.userId, if target.visible then target.position else nil)
-			return nil
+			abilityRequest = EntityAI.decideAbility(Types.EntityPhase.Chase, target.visible, target.distance, range)
+			return nil, abilityRequest
 		end
 
 		if target.position then
@@ -298,12 +330,12 @@ function EntityAI.update(self: EntityAI, dt: number, observations: { Types.Entit
 
 		if self.attackCooldownTimer <= 0 then
 			self.attackCooldownTimer = GameConfig.Entity.AttackCooldown
-			return target.userId
+			return target.userId, nil
 		end
-		return nil
+		return nil, nil
 	end
 
-	return nil
+	return nil, nil
 end
 
 -- ───────────────────────────────────────────────────────────────────────

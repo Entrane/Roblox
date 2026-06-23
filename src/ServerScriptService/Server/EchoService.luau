@@ -287,18 +287,23 @@ local function tickAI(dt: number)
 		return -- ⚠️ pas de corps d'entité (asset Studio) : l'IA n'agit pas ce tick.
 	end
 
-	-- Observations gated (visible/audible) pour la nav de l'IA.
+	-- Observations gated (visible/audible) pour la nav de l'IA. update renvoie le
+	-- coup frappé ET la capacité demandée à l'entrée d'une phase (cf. EntityAI).
 	local obs = buildObservations(entityRoot.Position, "onContact", { entityRoot.Parent :: Instance })
-	local hit = ai:update(dt, obs)
+	local hit, abilityRequest = ai:update(dt, obs)
 
 	-- ⚠️ À VALIDER DANS STUDIO : déplacement réel du corps (MoveTo/pathfinding)
-	-- d'après ai:getState() (lastKnownPosition + phase → PatrolSpeed/ChaseSpeed).
-	-- Branchement minimal : on laisse l'asset/pathfinding pour l'étape entité.
+	-- d'après ai:getState() (lastKnownPosition + phase → PatrolSpeed/ChaseSpeed),
+	-- avec multiplicateur de Frénésie lu sur echoController:getState().frenzy
+	-- (activeRemaining > 0). Branchement minimal : on laisse le mouvement à Studio.
 
-	-- EchoController reste instancié mais DORMANT en MVP IA : pas de client humain
-	-- pour ses pings, et pas encore de hook de décision IA appelant requestAbility
-	-- (retouche future d'EntityAI). On avance néanmoins ses timers pour cohérence.
+	-- Hook capacités IA : EntityAI a décidé (Frenzy en Chase, Howl en Search) ;
+	-- requestAbility est le GARDIEN du cooldown (ignore si indispo) → EntityAI
+	-- reste pur, aucun couplage. Ordre requestAbility→update comme le flux humain.
 	if echoController then
+		if abilityRequest ~= nil then
+			echoController:requestAbility(abilityRequest)
+		end
 		echoController:update(dt, {})
 	end
 
