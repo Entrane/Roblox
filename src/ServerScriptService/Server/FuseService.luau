@@ -60,7 +60,10 @@ local fuseParts: { [number]: BasePart } = {}
 local exitUnlocked = false
 local recentlyEscaped: { [number]: number } = {} -- userId -> os.clock
 local lastPhase: Types.RoundPhase = RoundService.getRoundManager():getPhase()
-local worldConnected = false
+-- Connexions monde INDÉPENDANTES : un objet absent ne doit pas bloquer l'autre
+-- (sinon un ExitZone manquant empêcherait le branchement du dépôt au générateur).
+local generatorConnected = false
+local exitConnected = false
 local initialized = false
 
 -- Warn une seule fois par clé (anti-spam quand un objet manque tick après tick).
@@ -206,6 +209,8 @@ local function onGeneratorTriggered(player: Player)
 		return -- ne porte rien : rien à déposer
 	end
 	if fuseSystem:deposit(carriedId, player.UserId) then
+		local progress = fuseSystem:getProgress()
+		print(string.format("[FuseService] Fusible %d déposé (%d/%d).", carriedId, progress.collected, progress.required))
 		checkExitUnlock()
 	end
 end
@@ -345,33 +350,38 @@ end
 -- Connexions monde (générateur + sortie) — une seule fois, dès que dispo
 -- ───────────────────────────────────────────────────────────────────────
 
+-- Branche le générateur (dépôt) et la sortie (évasion) SÉPARÉMENT : chacun se
+-- connecte dès que SON objet est disponible, indépendamment de l'autre. Idempotent
+-- via les deux flags ; réessayé à chaque onPlayingStarted tant qu'un objet manque.
 local function setupWorldConnections()
-	if worldConnected then
-		return
+	-- Générateur → prompt de dépôt (NE dépend PLUS de ExitZone).
+	if not generatorConnected then
+		local generator = getMapBasePart("Generator")
+		if generator then
+			local generatorPrompt = generator:FindFirstChildOfClass("ProximityPrompt")
+			if not generatorPrompt then
+				local p = Instance.new("ProximityPrompt")
+				p.ActionText = "Déposer le fusible"
+				p.ObjectText = "Générateur"
+				p.HoldDuration = GameConfig.Interaction.FuseGrabTime
+				p.MaxActivationDistance = GameConfig.Interaction.Distance
+				p.RequiresLineOfSight = false
+				p.Parent = generator
+				generatorPrompt = p
+			end
+			generatorPrompt.Triggered:Connect(onGeneratorTriggered)
+			generatorConnected = true
+		end
 	end
 
-	local generator = getMapBasePart("Generator")
-	local exitZone = getMapBasePart("ExitZone")
-	if not generator or not exitZone then
-		return -- pas encore prêt : on réessaiera au prochain onPlayingStarted
+	-- Sortie → détection d'évasion (NE bloque PLUS le générateur si absente).
+	if not exitConnected then
+		local exitZone = getMapBasePart("ExitZone")
+		if exitZone then
+			exitZone.Touched:Connect(onExitTouched)
+			exitConnected = true
+		end
 	end
-
-	local generatorPrompt = generator:FindFirstChildOfClass("ProximityPrompt")
-	if not generatorPrompt then
-		local p = Instance.new("ProximityPrompt")
-		p.ActionText = "Déposer le fusible"
-		p.ObjectText = "Générateur"
-		p.HoldDuration = GameConfig.Interaction.FuseGrabTime
-		p.MaxActivationDistance = GameConfig.Interaction.Distance
-		p.RequiresLineOfSight = false
-		p.Parent = generator
-		generatorPrompt = p
-	end
-	generatorPrompt.Triggered:Connect(onGeneratorTriggered)
-
-	exitZone.Touched:Connect(onExitTouched)
-
-	worldConnected = true
 end
 
 -- ───────────────────────────────────────────────────────────────────────
