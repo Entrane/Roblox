@@ -91,8 +91,28 @@ local MILESTONES: { TitleManager.Milestone } = {
 type XpData = { totalXp: number, unlockedTitles: { string }, activeTitle: string?, stats: StatsAggregator.LifetimeStats }
 type QuestData = { date: string, gamesPlayed: number, q1Done: boolean, q2Done: boolean, q3Done: boolean }
 
-local xpStore = DataStoreService:GetDataStore(XP_STORE)
-local questStore = DataStoreService:GetDataStore(QUEST_STORE)
+-- ⚠️ Init DataStore en pcall : en Studio local sans accès API aux services
+-- (« You must publish this place to use DataStore »), GetDataStore peut LEVER.
+-- Comme c'est au top-niveau du module, ça ferait échouer le require → tout
+-- init.server (donc le serveur entier) ne démarrerait pas. On dégrade
+-- gracieusement : warn + caches MÉMOIRE seuls (aucune persistance cette session).
+local xpStore: DataStore? = nil
+local questStore: DataStore? = nil
+do
+	local ok, err = pcall(function()
+		xpStore = DataStoreService:GetDataStore(XP_STORE)
+		questStore = DataStoreService:GetDataStore(QUEST_STORE)
+	end)
+	if not ok then
+		xpStore = nil
+		questStore = nil
+		warn(
+			"[ProgressionService] DataStore indisponible ("
+				.. tostring(err)
+				.. ") : progression EN MÉMOIRE seulement (aucune persistance)."
+		)
+	end
+end
 
 local xpCache: { [number]: XpData } = {}
 local questCache: { [number]: QuestData } = {}
@@ -207,9 +227,13 @@ local function loadPlayer(player: Player)
 	local uid = player.UserId
 	local key = tostring(uid)
 
-	local ok, data = pcall(function()
-		return xpStore:GetAsync(key)
-	end)
+	-- DataStore absent (Studio sans API) → lecture sautée, valeurs par défaut.
+	local ok, data = false, nil
+	if xpStore then
+		ok, data = pcall(function()
+			return xpStore:GetAsync(key)
+		end)
+	end
 	local totalXp = 0
 	local titles: { string } = {}
 	local activeTitle: string? = nil
@@ -226,7 +250,7 @@ local function loadPlayer(player: Player)
 		if type(data.activeTitle) == "string" then
 			activeTitle = data.activeTitle
 		end
-	elseif not ok then
+	elseif xpStore and not ok then
 		warn("[ProgressionService] GetAsync XP échoué pour " .. key .. " : valeurs par défaut.")
 	end
 	-- Migration / cohérence : un compte (legacy ou non) doit posséder TOUS les
@@ -240,9 +264,12 @@ local function loadPlayer(player: Player)
 	local lifeStats = StatsAggregator.sanitize(if ok and type(data) == "table" then data.stats else nil)
 	xpCache[uid] = { totalXp = totalXp, unlockedTitles = titles, activeTitle = activeTitle, stats = lifeStats }
 
-	local ok2, qdata = pcall(function()
-		return questStore:GetAsync(key)
-	end)
+	local ok2, qdata = false, nil
+	if questStore then
+		ok2, qdata = pcall(function()
+			return questStore:GetAsync(key)
+		end)
+	end
 	local q: QuestData
 	if ok2 and type(qdata) == "table" then
 		q = {
@@ -254,7 +281,7 @@ local function loadPlayer(player: Player)
 		}
 	else
 		q = defaultQuests()
-		if not ok2 then
+		if questStore and not ok2 then
 			warn("[ProgressionService] GetAsync quêtes échoué pour " .. key .. " : valeurs par défaut.")
 		end
 	end
@@ -281,7 +308,7 @@ local function savePlayer(uid: number, force: boolean?)
 	local xp = xpCache[uid]
 	local q = questCache[uid]
 
-	if xp then
+	if xp and xpStore then
 		pcall(function()
 			xpStore:UpdateAsync(key, function(old)
 				-- max() : ne jamais régresser l'XP si une autre session avait écrit plus.
@@ -304,7 +331,7 @@ local function savePlayer(uid: number, force: boolean?)
 		end)
 	end
 
-	if q then
+	if q and questStore then
 		pcall(function()
 			questStore:UpdateAsync(key, function(_old)
 				return { date = q.date, gamesPlayed = q.gamesPlayed, q1Done = q.q1Done, q2Done = q.q2Done, q3Done = q.q3Done }
