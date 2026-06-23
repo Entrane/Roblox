@@ -213,23 +213,40 @@ end
 -- Décision de capacité (PURE, statique) — isolée pour le test direct
 -- ───────────────────────────────────────────────────────────────────────
 
--- À l'entrée d'une phase, quelle capacité l'IA DEMANDE-t-elle (intention pure) ?
---   - Chase + cible visible ET hors de portée d'attaque → Frenzy (combler l'écart).
---   - Search → Howl (le chasseur « hurle » en perdant la vue).
+-- Quelle capacité l'IA DEMANDE-t-elle ce tick (intention pure, par phase) ?
+--   - Chase + au moins 2 survivants Alive observés → Howl (la révélation totale
+--     est surtout utile quand plusieurs cibles sont à pister).
+--   - Attack + cible Alive → Frenzy (bouffée de vitesse pour la rattraper si elle
+--     repart).
 --   - sinon nil.
 -- EntityAI N'A AUCUNE connaissance des cooldowns : c'est EchoController qui, en
 -- recevant la demande, l'ignore si la capacité est en cooldown/active (gardien
--- unique). attackRange est passé en paramètre → fonction config-free, testable.
-function EntityAI.decideAbility(enteredPhase: Types.EntityPhase, targetVisible: boolean, distance: number, attackRange: number): Types.AbilityId?
-	if enteredPhase == Types.EntityPhase.Chase then
-		if targetVisible and distance > attackRange then
+-- unique). aliveCount/targetAlive sont des faits déjà calculés → fonction
+-- config-free, testable directement.
+function EntityAI.decideAbility(phase: Types.EntityPhase, aliveCount: number, targetAlive: boolean): Types.AbilityId?
+	if phase == Types.EntityPhase.Chase then
+		if aliveCount >= 2 then
+			return Types.AbilityId.Howl
+		end
+		return nil
+	elseif phase == Types.EntityPhase.Attack then
+		if targetAlive then
 			return Types.AbilityId.Frenzy
 		end
 		return nil
-	elseif enteredPhase == Types.EntityPhase.Search then
-		return Types.AbilityId.Howl
 	end
 	return nil
+end
+
+-- Compte les survivants Alive dans les observations (pour la décision Howl).
+local function countAlive(observations: { Types.EntityObservation }): number
+	local n = 0
+	for _, o in observations do
+		if o.lifeState == Types.LifeState.Alive then
+			n += 1
+		end
+	end
+	return n
 end
 
 -- ───────────────────────────────────────────────────────────────────────
@@ -265,9 +282,8 @@ function EntityAI.update(self: EntityAI, dt: number, observations: { Types.Entit
 		local target = selectTarget(obsList)
 		if target then
 			self:_enterChase(target.userId, target.position)
-			abilityRequest = EntityAI.decideAbility(Types.EntityPhase.Chase, target.visible, target.distance, range)
 		end
-		return nil, abilityRequest
+		return nil, nil -- Patrol ne demande aucune capacité
 
 	elseif phase == Types.EntityPhase.Chase then
 		local current = findObservation(obsList, self.targetUserId)
@@ -290,8 +306,9 @@ function EntityAI.update(self: EntityAI, dt: number, observations: { Types.Entit
 			self:_enterAttack()
 		elseif self.noContactTimer >= GameConfig.Entity.LoseTargetTime then
 			self:_enterSearch()
-			abilityRequest = EntityAI.decideAbility(Types.EntityPhase.Search, false, 0, range)
 		end
+		-- Décision Chase : Howl si ≥ 2 survivants Alive observés.
+		abilityRequest = EntityAI.decideAbility(Types.EntityPhase.Chase, countAlive(obsList), false)
 		return nil, abilityRequest
 
 	elseif phase == Types.EntityPhase.Search then
@@ -304,11 +321,10 @@ function EntityAI.update(self: EntityAI, dt: number, observations: { Types.Entit
 		local reacquired = selectTarget(obsList)
 		if reacquired then
 			self:_enterChase(reacquired.userId, reacquired.position)
-			abilityRequest = EntityAI.decideAbility(Types.EntityPhase.Chase, reacquired.visible, reacquired.distance, range)
 		elseif self.stateTimer >= GameConfig.Entity.SearchDuration then
 			self:_enterPatrol()
 		end
-		return nil, abilityRequest
+		return nil, nil -- Search ne demande aucune capacité
 
 	elseif phase == Types.EntityPhase.Attack then
 		local current = findObservation(obsList, self.targetUserId)
@@ -317,10 +333,12 @@ function EntityAI.update(self: EntityAI, dt: number, observations: { Types.Entit
 			return nil, nil
 		end
 		local target = current :: Types.EntityObservation
+		-- Décision Attack : Frenzy si la cible est Alive (rattraper si elle repart).
+		local targetAlive = target.lifeState == Types.LifeState.Alive
+		abilityRequest = EntityAI.decideAbility(Types.EntityPhase.Attack, 0, targetAlive)
 
 		if not target.visible or target.distance > range then
 			self:_enterChase(target.userId, if target.visible then target.position else nil)
-			abilityRequest = EntityAI.decideAbility(Types.EntityPhase.Chase, target.visible, target.distance, range)
 			return nil, abilityRequest
 		end
 
@@ -330,9 +348,9 @@ function EntityAI.update(self: EntityAI, dt: number, observations: { Types.Entit
 
 		if self.attackCooldownTimer <= 0 then
 			self.attackCooldownTimer = GameConfig.Entity.AttackCooldown
-			return target.userId, nil
+			return target.userId, abilityRequest
 		end
-		return nil, nil
+		return nil, abilityRequest
 	end
 
 	return nil, nil
