@@ -62,6 +62,10 @@ local EVENT_NAMES = {
 	"RoundState", -- (state: Types.RoundState) — FireAllClients ; phase/timer/winner
 	"FuseProgress", -- (progress: Types.FuseProgress) — FireAllClients ; x/5
 	"PlayerHud", -- (state: Types.HudPlayerState) — FireClient au SEUL joueur concerné
+
+	-- ── Serveur → client (progression, FireClient ciblé) ──
+	"XpResult", -- (result: Types.XpResult) — FireClient en fin de manche
+	"QuestState", -- (state: Types.QuestState) — FireClient au chargement + après manche
 }
 
 -- Trouve le RemoteEvent ; le crée côté serveur, l'attend côté client.
@@ -95,6 +99,9 @@ export type Remotes = {
 	RoundState: RemoteEvent,
 	FuseProgress: RemoteEvent,
 	PlayerHud: RemoteEvent,
+	-- Serveur → client (progression)
+	XpResult: RemoteEvent,
+	QuestState: RemoteEvent,
 }
 
 local Remotes = {} :: Remotes

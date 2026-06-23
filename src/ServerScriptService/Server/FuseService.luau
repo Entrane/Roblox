@@ -64,6 +64,9 @@ local fuseParts: { [number]: BasePart } = {}
 
 local exitUnlocked = false
 local recentlyEscaped: { [number]: number } = {} -- userId -> os.clock
+-- Compteur de dépôts par joueur sur la manche (progression XP). Lu par
+-- ProgressionService au Resolved, remis à zéro à l'entrée Playing.
+local roundDeposits: { [number]: number } = {}
 local lastPhase: Types.RoundPhase = RoundService.getRoundManager():getPhase()
 -- Connexions monde INDÉPENDANTES : un objet absent ne doit pas bloquer l'autre
 -- (sinon un ExitZone manquant empêcherait le branchement du dépôt au générateur).
@@ -216,6 +219,7 @@ local function onGeneratorTriggered(player: Player)
 	if fuseSystem:deposit(carriedId, player.UserId) then
 		local progress = fuseSystem:getProgress()
 		print(string.format("[FuseService] Fusible %d déposé (%d/%d).", carriedId, progress.collected, progress.required))
+		roundDeposits[player.UserId] = (roundDeposits[player.UserId] or 0) + 1 -- crédit XP
 		checkExitUnlock()
 	end
 end
@@ -435,6 +439,7 @@ local function onPlayingStarted()
 	fuseSystem:resetRound() -- tout → Hidden
 	lockExit()
 	table.clear(recentlyEscaped)
+	table.clear(roundDeposits) -- reset compteur XP de la manche
 	reconcileVisuals() -- repositionne immédiatement les modèles sur leurs spots
 end
 
@@ -480,6 +485,12 @@ end
 -- ───────────────────────────────────────────────────────────────────────
 -- Interface publique
 -- ───────────────────────────────────────────────────────────────────────
+
+-- Lecture : nb de dépôts par joueur sur la manche (progression). Lu par
+-- ProgressionService au Resolved, AVANT le reset du prochain onPlayingStarted.
+function FuseService.getRoundDeposits(): { [number]: number }
+	return roundDeposits
+end
 
 -- Point d'entrée unique. Appelé par init.server.luau APRÈS PlayerService.init()
 -- (on lit son état et on appelle markEscaped).

@@ -58,6 +58,12 @@ local lastResolved = false
 -- Revalidées chaque tick (portée monde) avant d'être transmises à PlayerState.
 local reviveIntents: { [number]: number } = {}
 
+-- Compteurs de manche pour la progression (XP). Lus par ProgressionService au
+-- Resolved, réinitialisés à l'entrée Playing. Aucun module Logic impliqué.
+local roundKills = 0 -- nb de Downed→Dead causés par applyAttack (= kills de l'Écho)
+local roundRevives: { [number]: number } = {} -- rescuerId -> nb de réanimations réussies
+local lastRescuerOf: { [number]: number } = {} -- targetId -> sauveteur tenant la réa (ce tick)
+
 local initialized = false
 
 -- ───────────────────────────────────────────────────────────────────────
@@ -163,6 +169,14 @@ local function onLifeStateChanged(userId: number, previous: Types.PlayerLifeStat
 		enterDowned(userId)
 	elseif current == Types.LifeState.Alive then
 		exitDowned(userId) -- depuis Downed (réanimation)
+		-- Crédit XP : Downed→Alive = réanimation réussie. On crédite le sauveteur
+		-- qui tenait la réa ce tick (lastRescuerOf, connu de resolveRevives).
+		if previous == Types.LifeState.Downed then
+			local rescuerId = lastRescuerOf[userId]
+			if rescuerId then
+				roundRevives[rescuerId] = (roundRevives[rescuerId] or 0) + 1
+			end
+		end
 	elseif current == Types.LifeState.Dead then
 		enterDead(userId)
 	end
@@ -191,6 +205,10 @@ local function resolveRevives()
 			heldTargets[targetId] = rescuerId
 		end
 	end
+
+	-- Mémorise QUI tient chaque réa ce tick : sert au crédit XP de réanimation
+	-- (onLifeStateChanged, transition Downed→Alive).
+	lastRescuerOf = heldTargets
 
 	for targetId, rescuerId in heldTargets do
 		playerState:setReviving(targetId, rescuerId) -- état revalidé dans PlayerState
@@ -244,6 +262,11 @@ local function onPlayingStarted()
 		end
 	end
 	lastResolved = false
+
+	-- Reset des compteurs de manche (progression).
+	roundKills = 0
+	roundRevives = {}
+	lastRescuerOf = {}
 end
 
 -- Sortie de Playing : reset EXPLICITE du front montant de résolution (et non
@@ -444,8 +467,22 @@ function PlayerService.getPlayerState(): PlayerState.PlayerState
 end
 
 -- Écriture ciblée : EntityService inflige les dégâts sans connaître l'API exacte.
+-- Crédit XP : un Downed→Dead causé ICI = un kill de l'Écho (compté pour la manche ;
+-- ProgressionService l'attribuera au joueur Écho). Le saignement (Downed→Dead dans
+-- update) ne passe PAS par ici → non compté comme kill, ce qui est voulu.
 function PlayerService.applyAttack(userId: number)
+	local before = playerState:getState(userId)
 	playerState:applyAttack(userId)
+	local after = playerState:getState(userId)
+	if before and after and before.lifeState == Types.LifeState.Downed and after.lifeState == Types.LifeState.Dead then
+		roundKills += 1
+	end
+end
+
+-- Lecture : compteurs de manche pour la progression (lus par ProgressionService
+-- au Resolved, AVANT le reset du prochain onPlayingStarted).
+function PlayerService.getRoundStats(): { kills: number, revives: { [number]: number } }
+	return { kills = roundKills, revives = roundRevives }
 end
 
 -- Écriture ciblée : un pickup de pile (FuseService/interaction) recharge la torche.

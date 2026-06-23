@@ -22,6 +22,7 @@ local Remotes = require(ReplicatedStorage.Remotes.RemotesManifest)
 local HudController = require(script.HudController)
 local InputController = require(script.InputController)
 local ReviveController = require(script.ReviveController)
+local ProgressionController = require(script.ProgressionController)
 
 -- Rôle courant appliqué (nil = pas encore connu).
 local currentRole: Types.Role? = nil
@@ -55,6 +56,8 @@ local function onAssignRole(role: unknown)
 end
 
 HudController.init()
+ProgressionController.init() -- non role-gated : XP/quêtes pour tous
+
 Remotes.AssignRole.OnClientEvent:Connect(onAssignRole)
 
 print("[Signal Lost] Client prêt — en attente d'AssignRole…")

@@ -219,4 +219,46 @@ export type EcholocationPing = {
 	position: Vector3,
 }
 
+-- ═══════════════════════════════════════════════════════════════════════
+-- PROGRESSION (XP / niveaux / quêtes) — contrats des Remotes serveur→client
+-- ═══════════════════════════════════════════════════════════════════════
+
+-- Détail des composants d'XP gagnés sur une manche (affichage de fin).
+export type XpBreakdown = {
+	participation: number,
+	escaped: number,
+	deposits: number,
+	revives: number,
+	kills: number,
+	quests: number, -- récompenses de quêtes complétées CETTE manche
+}
+
+-- Payload XpResult (FireClient, fin de manche). `friendBonus` = XP bonus dû aux
+-- amis (déjà inclus dans xpGained). `suggestInvite` = manche à < 4 joueurs.
+export type XpResult = {
+	xp: number, -- XP total cumulé
+	level: number, -- niveau dérivé de xp
+	xpGained: number, -- XP gagné CETTE manche (perf×bonus amis + quêtes)
+	breakdown: XpBreakdown,
+	friendBonus: number,
+	friendCount: number,
+	suggestInvite: boolean,
+	playerCount: number,
+}
+
+-- Une quête journalière (état répliqué au client).
+export type Quest = {
+	id: string,
+	label: string,
+	progress: number, -- avancement courant
+	goal: number, -- objectif (3 pour "jouer 3 parties", 1 pour les autres)
+	complete: boolean,
+	xpReward: number,
+}
+
+-- Payload QuestState (FireClient, au chargement + après chaque manche).
+export type QuestState = {
+	quests: { Quest },
+}
+
 return Types
