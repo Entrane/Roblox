@@ -33,6 +33,9 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local ServerStorage = game:GetService("ServerStorage")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local PathfindingService = game:GetService("PathfindingService")
+local Debris = game:GetService("Debris")
+local TweenService = game:GetService("TweenService")
 
 local RoleManager = require(ServerStorage.Logic.RoleManager)
 local EchoController = require(ServerStorage.Logic.EchoController)
@@ -304,6 +307,76 @@ local function nextPatrolTarget(fromPos: Vector3): Vector3?
 	return target
 end
 
+-- ───────────────────────────────────────────────────────────────────────
+-- Pathfinding de l'entité IA : contourne les murs (au lieu d'un MoveTo direct).
+-- Le chemin est recalculé en THREAD (ComputeAsync yield) pour ne pas bloquer le
+-- tick ; en attendant / si échec, repli sur MoveTo direct.
+-- ───────────────────────────────────────────────────────────────────────
+local entityPath: Path? = nil
+local pathWaypoints: { PathWaypoint } = {}
+local pathIndex = 1
+local pathTarget: Vector3? = nil
+local pathComputedAt = 0
+local pathComputing = false
+local PATH_RECOMPUTE_INTERVAL = 0.5 -- s entre deux recalculs
+local PATH_RETARGET_DIST = 6 -- studs : cible qui bouge plus que ça → recalcul
+local WAYPOINT_REACHED = 4 -- studs
+
+local function recomputePath(fromPos: Vector3, target: Vector3)
+	pathComputing = true
+	task.spawn(function()
+		if not entityPath then
+			entityPath = PathfindingService:CreatePath({
+				AgentRadius = 2,
+				AgentHeight = 5,
+				AgentCanJump = false,
+			})
+		end
+		local path = entityPath :: Path
+		local ok = pcall(function()
+			path:ComputeAsync(fromPos, target)
+		end)
+		if ok and path.Status == Enum.PathStatus.Success then
+			pathWaypoints = path:GetWaypoints()
+			pathIndex = 1
+		else
+			pathWaypoints = {} -- échec → repli MoveTo direct
+		end
+		pathComputedAt = os.clock()
+		pathTarget = target
+		pathComputing = false
+	end)
+end
+
+-- Déplace l'entité vers `target` en suivant un chemin contournant les murs.
+local function moveEntityAlongPath(humanoid: Humanoid, fromPos: Vector3, target: Vector3)
+	local now = os.clock()
+	local stale = (now - pathComputedAt > PATH_RECOMPUTE_INTERVAL)
+		or (pathTarget == nil)
+		or (((pathTarget :: Vector3) - target).Magnitude > PATH_RETARGET_DIST)
+	if stale and not pathComputing then
+		recomputePath(fromPos, target)
+	end
+
+	if #pathWaypoints == 0 then
+		humanoid:MoveTo(target) -- pas (encore) de chemin : repli direct
+		return
+	end
+
+	local wp = pathWaypoints[pathIndex]
+	local flat = (Vector3.new(wp.Position.X, 0, wp.Position.Z) - Vector3.new(fromPos.X, 0, fromPos.Z)).Magnitude
+	if flat <= WAYPOINT_REACHED then
+		pathIndex += 1
+		if pathIndex > #pathWaypoints then
+			pathWaypoints = {}
+			humanoid:MoveTo(target)
+			return
+		end
+		wp = pathWaypoints[pathIndex]
+	end
+	humanoid:MoveTo(wp.Position)
+end
+
 local function tickAI(dt: number)
 	local ai = entityAI
 	if not ai then
@@ -336,7 +409,7 @@ local function tickAI(dt: number)
 
 		local target: Vector3? = state.lastKnownPosition or nextPatrolTarget(entityRoot.Position)
 		if target then
-			humanoid:MoveTo(target)
+			moveEntityAlongPath(humanoid, entityRoot.Position, target)
 		end
 	end
 
@@ -598,6 +671,33 @@ end
 
 -- Mêlée de l'Écho humain. AUTORITÉ SERVEUR : identité (player) + Écho courant +
 -- cooldown + portée + lifeState tous revalidés. Aucune cible reçue du client.
+-- Effet visuel d'attaque de l'Écho : 3 griffures néon rouges devant lui qui
+-- s'étirent et s'effacent. Côté SERVEUR → vu par tous (l'effet vit dans Workspace).
+local function playEchoAttackEffect(player: Player)
+	local char = player.Character
+	local hrp = char and char:FindFirstChild("HumanoidRootPart")
+	if not hrp or not hrp:IsA("BasePart") then
+		return
+	end
+	for i = 1, 3 do
+		local slash = Instance.new("Part")
+		slash.Size = Vector3.new(0.25, 4, 0.25)
+		slash.Color = Color3.fromRGB(220, 30, 30)
+		slash.Material = Enum.Material.Neon
+		slash.Anchored = true
+		slash.CanCollide = false
+		slash.CanQuery = false
+		slash.CastShadow = false
+		slash.CFrame = hrp.CFrame * CFrame.new((i - 2) * 0.8, 0, -3) * CFrame.Angles(0, 0, math.rad(20))
+		slash.Parent = Workspace
+		Debris:AddItem(slash, 0.35)
+		TweenService:Create(slash, TweenInfo.new(0.3), {
+			Transparency = 1,
+			Size = Vector3.new(0.25, 6, 0.25),
+		}):Play()
+	end
+end
+
 local function onMeleeAttack(player: Player)
 	if mode ~= "Human" or player.UserId ~= echoUserId then
 		return -- pas l'Écho courant
@@ -615,6 +715,7 @@ local function onMeleeAttack(player: Player)
 	end
 	lastMeleeAt = os.clock() -- consommé seulement sur un coup RÉUSSI
 	PlayerService.applyAttack(targetId) -- Alive→Downed / Downed→Dead (+ crédit kill-XP)
+	playEchoAttackEffect(player)
 	Remotes.SoundEvent:FireClient(player, { soundId = SoundConfig.ECHO_ATTACK })
 end
 

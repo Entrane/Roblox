@@ -42,6 +42,11 @@ local localTime = 0
 local SURVIVOR_GROUP = { "Sprint", "Torch" }
 local ECHO_GROUP = { "Howl", "Frenzy" }
 
+-- Indicateur de bonus actif de l'Écho : un cercle par capacité qui RÉTRÉCIT selon
+-- le temps restant du bonus (Frénésie = plus rapide, Hurlement = voit plus loin).
+type BuffChip = { chip: Frame, circle: Frame, active: number, total: number }
+local buffChips: { [string]: BuffChip } = {}
+
 local LABELS: { [string]: string } = {
 	Sprint = "Sprint",
 	Torch = "Torche",
@@ -246,7 +251,92 @@ end
 
 -- Décompte local du timer entre deux pushes (le serveur ne tourne le timer qu'en
 -- Starting/Playing/Resolved ; en Lobby il est figé → on n'enlève rien).
+-- Construit l'indicateur de bonus (bas-centre) : 2 pastilles circulaires.
+local function buildBuffIndicator(parent: Instance)
+	local defs = {
+		{ name = "Frenzy", icon = "⚡", color = Color3.fromRGB(240, 140, 30), total = GameConfig.Echo.Frenzy.Duration },
+		{ name = "Howl", icon = "👁", color = Color3.fromRGB(80, 180, 240), total = GameConfig.Echo.Howl.RevealDuration },
+	}
+	local container = Instance.new("Frame")
+	container.Name = "Buffs"
+	container.AnchorPoint = Vector2.new(0.5, 1)
+	container.Position = UDim2.new(0.5, 0, 1, -14)
+	container.Size = UDim2.fromOffset(170, 72)
+	container.BackgroundTransparency = 1
+	container.Parent = parent
+	local layout = Instance.new("UIListLayout")
+	layout.FillDirection = Enum.FillDirection.Horizontal
+	layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	layout.VerticalAlignment = Enum.VerticalAlignment.Bottom
+	layout.Padding = UDim.new(0, 18)
+	layout.Parent = container
+
+	for _, def in defs do
+		local chip = Instance.new("Frame")
+		chip.Name = def.name
+		chip.Size = UDim2.fromOffset(64, 64)
+		chip.BackgroundTransparency = 1
+		chip.Visible = false
+		chip.Parent = container
+
+		local ring = Instance.new("Frame")
+		ring.AnchorPoint = Vector2.new(0.5, 0.5)
+		ring.Position = UDim2.fromScale(0.5, 0.5)
+		ring.Size = UDim2.fromOffset(60, 60)
+		ring.BackgroundTransparency = 1
+		ring.Parent = chip
+		local rc = Instance.new("UICorner")
+		rc.CornerRadius = UDim.new(0.5, 0)
+		rc.Parent = ring
+		local rs = Instance.new("UIStroke")
+		rs.Color = def.color
+		rs.Transparency = 0.5
+		rs.Thickness = 2
+		rs.Parent = ring
+
+		local circle = Instance.new("Frame")
+		circle.AnchorPoint = Vector2.new(0.5, 0.5)
+		circle.Position = UDim2.fromScale(0.5, 0.5)
+		circle.Size = UDim2.fromOffset(56, 56)
+		circle.BackgroundColor3 = def.color
+		circle.BackgroundTransparency = 0.3
+		circle.Parent = chip
+		local cc = Instance.new("UICorner")
+		cc.CornerRadius = UDim.new(0.5, 0)
+		cc.Parent = circle
+
+		local icon = Instance.new("TextLabel")
+		icon.AnchorPoint = Vector2.new(0.5, 0.5)
+		icon.Position = UDim2.fromScale(0.5, 0.5)
+		icon.Size = UDim2.fromOffset(38, 38)
+		icon.BackgroundTransparency = 1
+		icon.Text = def.icon
+		icon.TextScaled = true
+		icon.TextColor3 = Color3.fromRGB(255, 255, 255)
+		icon.ZIndex = 2
+		icon.Parent = chip
+
+		buffChips[def.name] = { chip = chip, circle = circle, active = 0, total = def.total }
+	end
+end
+
+-- Met à jour les cercles : décompte local + rétrécissement proportionnel.
+local function updateBuffs(dt: number)
+	for _, b in buffChips do
+		if b.active > 0 then
+			b.active = math.max(0, b.active - dt)
+			local ratio = if b.total > 0 then b.active / b.total else 0
+			local size = 10 + 46 * ratio
+			b.circle.Size = UDim2.fromOffset(size, size)
+			b.chip.Visible = b.active > 0
+		elseif b.chip.Visible then
+			b.chip.Visible = false
+		end
+	end
+end
+
 local function onHeartbeat(dt: number)
+	updateBuffs(dt)
 	if roundPhase ~= Types.RoundPhase.Lobby and localTime > 0 then
 		localTime = math.max(0, localTime - dt)
 		refreshRoundLabel()
@@ -283,6 +373,8 @@ function HudController.init()
 	for _, btn in buttons do
 		btn.Parent = actions
 	end
+
+	buildBuffIndicator(gui)
 
 	-- Barre du haut (tous rôles) : phase/timer à gauche, fusibles à droite.
 	roundLabel = makeLabel("Round", UDim2.new(0.5, -210, 0, 8), UDim2.fromOffset(260, 32))
@@ -445,6 +537,15 @@ function HudController.setAbilityState(abilityId: Types.AbilityId, cooldownRemai
 	else
 		btn.Text = label
 		btn.BackgroundColor3 = Color3.fromRGB(40, 40, 45)
+	end
+
+	-- Indicateur de bonus : (re)synchronise le temps actif depuis le serveur.
+	local b = buffChips[name]
+	if b then
+		b.active = activeRemaining
+		if activeRemaining <= 0 then
+			b.chip.Visible = false
+		end
 	end
 end
 
