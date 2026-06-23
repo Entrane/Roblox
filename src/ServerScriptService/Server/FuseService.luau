@@ -102,6 +102,33 @@ local function getMapBasePart(name: string): BasePart?
 	return nil
 end
 
+-- Spot d'un fusible : Workspace.Map.FuseSpots.FuseSpot{index} — dossier
+-- intermédiaire FuseSpots. Chaque niveau gardé défensivement (Map, FuseSpots,
+-- FuseSpot{index}, type BasePart) → warn clair + nil, jamais de crash.
+local function getFuseSpot(index: number): BasePart?
+	local map = Workspace:FindFirstChild("Map")
+	if not map then
+		warnOnce("Map", "[FuseService] Workspace.Map introuvable. ⚠️ map à valider.")
+		return nil
+	end
+	local folder = map:FindFirstChild("FuseSpots")
+	if not folder then
+		warnOnce("FuseSpots", "[FuseService] Workspace.Map.FuseSpots introuvable. ⚠️ map à valider.")
+		return nil
+	end
+	local name = "FuseSpot" .. index
+	local spot = folder:FindFirstChild(name)
+	if not spot then
+		warnOnce("FuseSpots." .. name, "[FuseService] Workspace.Map.FuseSpots." .. name .. " introuvable. ⚠️ map à valider.")
+		return nil
+	end
+	if not spot:IsA("BasePart") then
+		warnOnce("type.FuseSpots." .. name, "[FuseService] Workspace.Map.FuseSpots." .. name .. " n'est pas une BasePart. ⚠️")
+		return nil
+	end
+	return spot
+end
+
 -- Dossier conteneur des modèles de fusibles (créé si absent).
 local function fusesFolder(): Folder
 	local existing = Workspace:FindFirstChild("Fuses")
@@ -368,7 +395,7 @@ local function onPlayingStarted()
 	local folder = fusesFolder()
 	local found = 0
 	for i = 1, GameConfig.Fuses.Total do
-		local spot = getMapBasePart("FuseSpot" .. i)
+		local spot = getFuseSpot(i)
 		if spot then
 			fuseSpots[i] = spot
 			fuseSystem:registerFuse(i) -- idempotent

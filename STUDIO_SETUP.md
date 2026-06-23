@@ -31,11 +31,12 @@ on observe le serveur via l'Output et les ProximityPrompt, pas via un HUD.
 | ✓ | Chemin exact | Type requis | Propriétés clés | Taille approx. | Utilisé par |
 |---|---|---|---|---|---|
 | [ ] | `Map.SpawnPoint` | **BasePart** (Part ou SpawnLocation) | `Anchored=true` | ~6×1×6 | RoundService (téléport au début de chaque phase, offset +Y) |
-| [ ] | `Map.FuseSpot1` | **BasePart** | `Anchored=true` | ~2×1×2 | FuseService (fusible flotte à +3 Y au-dessus) |
-| [ ] | `Map.FuseSpot2` | **BasePart** | `Anchored=true` | ~2×1×2 | idem |
-| [ ] | `Map.FuseSpot3` | **BasePart** | `Anchored=true` | ~2×1×2 | idem |
-| [ ] | `Map.FuseSpot4` | **BasePart** | `Anchored=true` | ~2×1×2 | idem |
-| [ ] | `Map.FuseSpot5` | **BasePart** | `Anchored=true` | ~2×1×2 | idem |
+| [ ] | `Map.FuseSpots` | **Folder** (ou Model) | conteneur intermédiaire | — | FuseService (parent des 5 spots) |
+| [ ] | `Map.FuseSpots.FuseSpot1` | **BasePart** | `Anchored=true` | ~2×1×2 | FuseService (fusible flotte à +3 Y au-dessus) |
+| [ ] | `Map.FuseSpots.FuseSpot2` | **BasePart** | `Anchored=true` | ~2×1×2 | idem |
+| [ ] | `Map.FuseSpots.FuseSpot3` | **BasePart** | `Anchored=true` | ~2×1×2 | idem |
+| [ ] | `Map.FuseSpots.FuseSpot4` | **BasePart** | `Anchored=true` | ~2×1×2 | idem |
+| [ ] | `Map.FuseSpots.FuseSpot5` | **BasePart** | `Anchored=true` | ~2×1×2 | idem |
 | [ ] | `Map.Generator` | **BasePart** (⚠️ PAS un Model) | `Anchored=true`, `CanCollide=true` | ~6×6×4 | FuseService (prompt dépôt créé dessus ; fusible déposé flotte à +4 Y) |
 | [ ] | `Map.ExitBarrier` | **BasePart** | `Anchored=true`, **`CanCollide=true`**, `Transparency=0` | mur bloquant la sortie | FuseService (au 5/5 → `CanCollide=false` + `Transparency=0.7`) |
 | [ ] | `Map.ExitZone` | **BasePart** | `Anchored=true`, **`CanCollide=false`**, `CanTouch=true` | zone à franchir, **derrière** la barrière | FuseService (`Touched` → `markEscaped`) |
@@ -97,7 +98,9 @@ Instanciés par FuseService ; valeurs depuis `GameConfig.Interaction`.
 ### 🚩 Warns = item manquant à corriger (ne doivent PAS apparaître si la map est complète)
 - [ ] `[RoundService] Workspace.Map introuvable ...` → `Map` mal nommé/absent
 - [ ] `[RoundService] Workspace.Map.SpawnPoint introuvable ...` → SpawnPoint manquant
-- [ ] `[FuseService] Workspace.Map.<X> introuvable. ⚠️` → objet de map manquant
+- [ ] `[FuseService] Workspace.Map.<X> introuvable. ⚠️` → objet de map manquant (Generator/ExitBarrier/ExitZone)
+- [ ] `[FuseService] Workspace.Map.FuseSpots introuvable. ⚠️` → dossier intermédiaire `FuseSpots` manquant
+- [ ] `[FuseService] Workspace.Map.FuseSpots.FuseSpot<i> introuvable. ⚠️` → un spot manquant
 - [ ] `[FuseService] ... n'est pas une BasePart. ⚠️` → mauvais type (ex. Generator est un Model)
 - [ ] `[FuseService] <n>/5 FuseSpot trouvés : le 5/5 sera INATTEIGNABLE. ⚠️` → FuseSpot manquant(s)
 
