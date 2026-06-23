@@ -1074,4 +1074,19 @@ scenario("43. EchoController defensif - update(dt invalide / observations nil) n
 	)
 end)
 
+-- ============================================================
+-- EntityAI -- exclusion Escaped (bug fix)
+-- ============================================================
+
+scenario("44. EntityAI - cible verrouillee qui passe Escaped -> Patrol direct (comme Dead)", function(rep)
+	local ai = EntityAI.new()
+	ai:update(0.1, { mkObs(1, 20, true, false, Types.LifeState.Alive) }) -- Chase sur 1
+	ai:update(1, { mkObs(1, 20, true, false, Types.LifeState.Escaped) }) -- 1 s'echappe
+
+	local phase = ai:getPhase()
+	local target = ai:getState().targetUserId
+	local ok = phase == Types.EntityPhase.Patrol and target == nil
+	rep("phase=Patrol, target=nil", string.format("phase=%s, target=%s", phase, tostring(target)), ok)
+end)
+
 print(string.format("==================== TEST_Harness : FIN (%d PASS / %d FAIL) ====================", passCount, failCount))

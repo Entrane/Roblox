@@ -100,14 +100,15 @@ end
 -- Sélectionne le meilleur candidat éligible : Alive prioritaire sur Downed
 -- (priorité dernier-recours, cf. bloc DÉPENDANCES), puis le plus proche, puis
 -- le userId le plus petit en cas d'égalité exacte de distance (déterministe :
--- l'itération d'une table Lua n'a pas d'ordre garanti). Dead toujours exclu.
--- nil si aucun candidat éligible n'a de contact.
+-- l'itération d'une table Lua n'a pas d'ordre garanti). Dead ET Escaped exclus
+-- (un évadé a quitté la map : non ciblable, comme un mort). nil si aucun
+-- candidat éligible n'a de contact.
 local function selectTarget(observations: { Types.EntityObservation }): Types.EntityObservation?
 	local bestAlive: Types.EntityObservation? = nil
 	local bestDowned: Types.EntityObservation? = nil
 
 	for _, obs in observations do
-		if hasContact(obs) and obs.lifeState ~= Types.LifeState.Dead then
+		if hasContact(obs) and obs.lifeState ~= Types.LifeState.Dead and obs.lifeState ~= Types.LifeState.Escaped then
 			if obs.lifeState == Types.LifeState.Alive then
 				if not bestAlive or obs.distance < bestAlive.distance or (obs.distance == bestAlive.distance and obs.userId < bestAlive.userId) then
 					bestAlive = obs
@@ -139,11 +140,13 @@ local function findObservation(observations: { Types.EntityObservation }, userId
 end
 
 -- Règle transverse (Partie D) : la cible verrouillée a disparu du monde
--- (absente de la liste -- départ) OU est passée Dead (achevée, ou morte par
--- une autre voie comme le saignement). Dans les deux cas, plus aucune raison
--- de la suivre ou de la chercher.
+-- (absente de la liste -- départ), est passée Dead (achevée / saignement) OU
+-- s'est ÉCHAPPÉE (Escaped : sortie atteinte). Dans tous ces cas, plus aucune
+-- raison de la suivre ou de la chercher → retour Patrol direct.
 local function isTargetGone(current: Types.EntityObservation?): boolean
-	return current == nil or current.lifeState == Types.LifeState.Dead
+	return current == nil
+		or current.lifeState == Types.LifeState.Dead
+		or current.lifeState == Types.LifeState.Escaped
 end
 
 -- ───────────────────────────────────────────────────────────────────────
