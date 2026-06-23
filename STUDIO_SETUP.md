@@ -1,14 +1,14 @@
 # Checklist Studio — « Signal Lost » serveur en conditions réelles
 
-> **État du code de référence :** cette checklist a été écrite pour le commit
-> [`9edca63`](https://github.com/entrane/roblox/commit/9edca638f787fa62dc445c192217d08a98536e56)
-> (« Pivot PvP étape 6d : FuseService réel »). Si le code a évolué depuis,
-> revérifier les noms d'objets / valeurs ci-dessous contre les Services.
+> **État du code de référence :** checklist alignée sur la branche
+> `claude/friendly-shannon-6xpcs6` (boucle PvP + client HUD + map générée par
+> script). Si le code évolue, revérifier les noms d'objets / valeurs ci-dessous
+> contre les Services.
 
 Objectif : pouvoir ouvrir Studio, cocher chaque item, et faire **tourner la
 boucle serveur PvP** (lobby → rôles → manche → fusibles → sortie → évasion/mort
-→ résolution → intermission). ⚠️ Le **client (étape 9) n'existe pas encore** :
-on observe le serveur via l'Output et les ProximityPrompt, pas via un HUD.
+→ résolution → intermission), désormais avec le **client (HUD, écholocation,
+sprint/torche/revive, capacités Écho)** en place.
 
 ---
 
@@ -17,34 +17,59 @@ on observe le serveur via l'Output et les ProximityPrompt, pas via un HUD.
 - [ ] Rojo sync actif (`rojo serve` + plugin connecté) → `src/` peuplé dans
       ReplicatedStorage / ServerStorage / ServerScriptService / StarterPlayer.
 - [ ] **`Workspace.Map` n'est PAS synchronisé par Rojo** (absent de
-      `default.project.json`) → tout ce qui suit se construit **à la main**.
-- [ ] Un sol / baseplate sous toute la scène (les persos tombent sinon ;
-      `CharacterAutoLoads` est forcé à `false` par le code, spawns gérés via
-      `LoadCharacter` + téléport).
+      `default.project.json`) → elle se construit **via le script de génération**.
+- [ ] **Générer la map** : ouvrir `View > Command Bar`, coller **tout**
+      `place/build_map.lua` et exécuter. Le script **détruit l'ancienne
+      `Workspace.Map`** puis reconstruit sol, plafond fermé, 9 salles, couloirs
+      et tous les objets fonctionnels (noms exacts) ; il configure aussi le
+      `Lighting` (ambiance bunker de nuit). Idempotent : relançable à volonté.
+- [ ] Après génération, **sauver la map** : clic droit `Workspace.Map`
+      `> Save to File...` → `place/Map.rbxm` (le binaire est versionné à part —
+      Rojo ne le synchronise pas).
+- [ ] Le sol (`Map.Floor`, 140×140) et le plafond (`Map.Ceiling`) sont créés par
+      le script ; pas de baseplate manuelle à ajouter. `CharacterAutoLoads` est
+      forcé à `false` par le code (spawns via `LoadCharacter` + téléport).
 
 ---
 
-## 1. `Workspace.Map` — objets à créer (noms EXACTS, sensibles à la casse)
+## 1. Layout de la map — grille 3×3 « bunker laboratoire »
 
-> `Map` = Model ou Folder nommé exactement **`Map`**, enfant direct de `Workspace`.
+Le script `place/build_map.lua` place 9 salles (intérieur 30×30, centres espacés
+de 48 studs) reliées par des couloirs de 10 studs (adjacence de grille → boucles,
+≥ 2 chemins, pas d'impasse). Plafond fermé (ambiance bunker). **Le Sas (SE) n'a
+qu'une entrée**, gardée par l'`ExitBarrier`.
 
-| ✓ | Chemin exact | Type requis | Propriétés clés | Taille approx. | Utilisé par |
-|---|---|---|---|---|---|
-| [ ] | `Map.SpawnPoint` | **BasePart** (Part ou SpawnLocation) | `Anchored=true` | ~6×1×6 | RoundService (téléport au début de chaque phase, offset +Y) |
-| [ ] | `Map.FuseSpots` | **Folder** (ou Model) | conteneur intermédiaire | — | FuseService (parent des 5 spots) |
-| [ ] | `Map.FuseSpots.FuseSpot1` | **BasePart** | `Anchored=true` | ~2×1×2 | FuseService (fusible flotte à +3 Y au-dessus) |
-| [ ] | `Map.FuseSpots.FuseSpot2` | **BasePart** | `Anchored=true` | ~2×1×2 | idem |
-| [ ] | `Map.FuseSpots.FuseSpot3` | **BasePart** | `Anchored=true` | ~2×1×2 | idem |
-| [ ] | `Map.FuseSpots.FuseSpot4` | **BasePart** | `Anchored=true` | ~2×1×2 | idem |
-| [ ] | `Map.FuseSpots.FuseSpot5` | **BasePart** | `Anchored=true` | ~2×1×2 | idem |
-| [ ] | `Map.Generator` | **BasePart** (⚠️ PAS un Model) | `Anchored=true`, `CanCollide=true` | ~6×6×4 | FuseService (prompt dépôt créé dessus ; fusible déposé flotte à +4 Y) |
-| [ ] | `Map.ExitBarrier` | **BasePart** | `Anchored=true`, **`CanCollide=true`**, `Transparency=0` | mur bloquant la sortie | FuseService (au 5/5 → `CanCollide=false` + `Transparency=0.7`) |
-| [ ] | `Map.ExitZone` | **BasePart** | `Anchored=true`, **`CanCollide=false`**, `CanTouch=true` | zone à franchir, **derrière** la barrière | FuseService (`Touched` → `markEscaped`) |
+| Salle | Position (col,row) | Centre monde (X,Z) | Accent | Objet fonctionnel |
+|---|---|---|---|---|
+| Sécurité (NO) | (-1,-1) | (-48,-48) | rouge | `FuseSpots.FuseSpot5` |
+| Laboratoire (N) | (0,-1) | (0,-48) | cyan | `FuseSpots.FuseSpot1` |
+| Stockage (NE) | (1,-1) | (48,-48) | orange | `FuseSpots.FuseSpot2` |
+| Communications (O) | (-1,0) | (-48,0) | violet | `FuseSpots.FuseSpot4` |
+| **Hub** (C) | (0,0) | (0,0) | gris-bleu | `SpawnPoint` |
+| Médical (E) | (1,0) | (48,0) | vert | `FuseSpots.FuseSpot3` |
+| Maintenance (SO) | (-1,1) | (-48,48) | sombre | *(cachette, 2 couloirs)* |
+| Réacteur (S) | (0,1) | (0,48) | jaune | `Generator` |
+| Sas de sortie (SE) | (1,1) | (48,48) | lime | `ExitBarrier` + `ExitZone` |
+
+### Objets fonctionnels (noms EXACTS, sensibles à la casse — créés par le script)
+
+| Chemin exact | Type | Propriétés clés | Position (X,Y,Z) | Utilisé par |
+|---|---|---|---|---|
+| `Map.SpawnPoint` | **BasePart** | `Anchored=true` | (0, 0.5, 0) Hub | RoundService (téléport début de phase, offset +Y) |
+| `Map.FuseSpots` | **Folder** | conteneur des 5 spots | — | FuseService |
+| `Map.FuseSpots.FuseSpot1` | **BasePart** | `Anchored=true` | (0,0.5,-48) Labo | FuseService (fusible à +3 Y) |
+| `Map.FuseSpots.FuseSpot2` | **BasePart** | `Anchored=true` | (48,0.5,-48) Stockage | idem |
+| `Map.FuseSpots.FuseSpot3` | **BasePart** | `Anchored=true` | (48,0.5,0) Médical | idem |
+| `Map.FuseSpots.FuseSpot4` | **BasePart** | `Anchored=true` | (-48,0.5,0) Comms | idem |
+| `Map.FuseSpots.FuseSpot5` | **BasePart** | `Anchored=true` | (-48,0.5,-48) Sécurité | idem |
+| `Map.Generator` | **BasePart** (⚠️ PAS un Model) | `Anchored`, `CanCollide=true` | (0,3,48) Réacteur | FuseService (prompt dépôt ; fusible à +4 Y) |
+| `Map.ExitBarrier` | **BasePart** | `Anchored`, **`CanCollide=true`**, `Transparency=0` | (33,9,48) porte ouest du Sas | FuseService (au 5/5 → `CanCollide=false` + `Transparency=0.7`) |
+| `Map.ExitZone` | **BasePart** | `Anchored`, **`CanCollide=false`**, `CanTouch=true` | (58,0.5,48) **fond du Sas** | FuseService (`Touched` → `markEscaped`) |
 
 > ⚠️ `Generator`, `ExitBarrier`, `ExitZone`, `FuseSpot{i}`, `SpawnPoint`
 > **doivent être des BaseParts** (un Model est rejeté avec un warn).
-> Place `ExitZone` **derrière** `ExitBarrier` (on ne la touche qu'une fois la
-> barrière ouverte).
+> L'`ExitZone` est **au fond du Sas** (mur est) : une fois l'`ExitBarrier`
+> ouverte au 5/5, le joueur **traverse toute la salle** pour s'évader.
 > Le dossier **`Workspace.Fuses` est créé automatiquement** — ne pas le créer.
 
 ---
@@ -119,10 +144,12 @@ Instanciés par FuseService ; valeurs depuis `GameConfig.Interaction`.
 
 ---
 
-## ⚠️ Limite connue (étape 9 manquante)
+## ⚠️ À valider en Studio / sur appareil
 
-Sans client : en Play tu verras les **transitions serveur (Output)** et les
-**ProximityPrompt**, mais **pas** de HUD, **pas** de marqueurs d'écholocation, et
-les Remotes Écho (`ActivateAbility`) / survivant (sprint, torche, revive) ne sont
-pas encore émis. Le serveur est **observable et pilotable au prompt**, l'expérience
-complète attend l'étape 9.
+- [ ] **Sons** : `SoundConfig` contient des placeholders → remplacer par des
+      `rbxassetid://` une fois les audios choisis (un id invalide ne plante pas).
+- [ ] **Config de publication** (P2-11) : `StreamingEnabled`, budgets, etc.
+- [ ] **Validation mobile** (P2-12) : boutons HUD tactiles, lisibilité, perfs sur
+      appareil bas de gamme — à tester en device emulation puis sur vrai mobile.
+- [ ] **Map** : vérifier en Play que les 5 FuseSpots, le Generator, l'ExitBarrier
+      et l'ExitZone sont bien détectés (aucun warn `introuvable` en section 4).
