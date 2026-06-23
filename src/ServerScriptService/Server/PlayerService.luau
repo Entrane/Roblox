@@ -30,6 +30,7 @@ local ServerStorage = game:GetService("ServerStorage")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local PlayerState = require(ServerStorage.Logic.PlayerState)
+local RateLimiter = require(ServerStorage.Logic.RateLimiter)
 local Types = require(ReplicatedStorage.Shared.Types)
 local GameConfig = require(ReplicatedStorage.Shared.GameConfig)
 local Remotes = require(ReplicatedStorage.Remotes.RemotesManifest)
@@ -57,6 +58,12 @@ local lastResolved = false
 -- Intentions de réanimation reçues des clients : rescuerUserId -> targetUserId.
 -- Revalidées chaque tick (portée monde) avant d'être transmises à PlayerState.
 local reviveIntents: { [number]: number } = {}
+
+-- Anti-flood des Remotes survivant : un token bucket par (joueur, Remote). Les
+-- limites sont déclarées au site de branchement (init). IS_STUDIO gate le warn :
+-- une seule alerte par rafale rejetée en Studio, silencieux en production.
+local rateLimiter: RateLimiter.RateLimiter = RateLimiter.new()
+local IS_STUDIO = RunService:IsStudio()
 
 -- Compteurs de manche pour la progression (XP). Lus par ProgressionService au
 -- Resolved, réinitialisés à l'entrée Playing. Aucun module Logic impliqué.
@@ -429,6 +436,7 @@ end
 local function removePlayer(player: Player)
 	local userId = player.UserId
 	playerState:removePlayer(userId)
+	rateLimiter:removePlayer(userId) -- libère les seaux anti-flood du joueur
 	lastLife[userId] = nil
 	reviveIntents[userId] = nil
 	-- Nettoie aussi les intentions qui CIBLAIENT ce joueur.
@@ -442,6 +450,24 @@ end
 -- ───────────────────────────────────────────────────────────────────────
 -- Remotes (client -> serveur) — AUTORITÉ SERVEUR STRICTE
 -- ───────────────────────────────────────────────────────────────────────
+
+-- Décorateur anti-flood : enveloppe un handler OnServerEvent d'une garde token
+-- bucket. Le CORPS du handler reste intact (aucune logique métier polluée) ; la
+-- limite est posée au site de branchement. Rejet → drop silencieux (+ warn une
+-- fois par rafale en Studio). Les Remotes survivant portent 0 ou 1 charge utile.
+local function guarded(name: string, capacity: number, refillPerSec: number, handler: (Player, any) -> ())
+	return function(player: Player, payload: any)
+		local uid = player.UserId
+		local allowed, firstRejection = rateLimiter:allow(uid, name, capacity, refillPerSec, os.clock())
+		if not allowed then
+			if IS_STUDIO and firstRejection then
+				warn(string.format("[PlayerService] Rate limit : %s rejeté (rafale) pour le joueur %d.", name, uid))
+			end
+			return
+		end
+		handler(player, payload)
+	end
+end
 
 -- Identité = TOUJOURS `player` (fourni par OnServerEvent), jamais un userId du
 -- client. Les charges utiles sont validées par type avant transmission.
@@ -541,10 +567,12 @@ function PlayerService.init()
 	Players.PlayerAdded:Connect(registerPlayer)
 	Players.PlayerRemoving:Connect(removePlayer)
 
-	Remotes.SetSprinting.OnServerEvent:Connect(onSetSprinting)
-	Remotes.SetTorch.OnServerEvent:Connect(onSetTorch)
-	Remotes.SetReviving.OnServerEvent:Connect(onSetReviving)
-	Remotes.StopReviving.OnServerEvent:Connect(onStopReviving)
+	-- Limites premier jet (généreuses, ⚠️ PARI) calibrées sur les patterns réels :
+	-- toggles fréquents (sprint/torche) plus permissifs que les actions à l'appui.
+	Remotes.SetSprinting.OnServerEvent:Connect(guarded("SetSprinting", 6, 3, onSetSprinting))
+	Remotes.SetTorch.OnServerEvent:Connect(guarded("SetTorch", 6, 3, onSetTorch))
+	Remotes.SetReviving.OnServerEvent:Connect(guarded("SetReviving", 4, 2, onSetReviving))
+	Remotes.StopReviving.OnServerEvent:Connect(guarded("StopReviving", 5, 3, onStopReviving))
 
 	RunService.Heartbeat:Connect(tick)
 end

@@ -37,6 +37,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RoleManager = require(ServerStorage.Logic.RoleManager)
 local EchoController = require(ServerStorage.Logic.EchoController)
 local EntityAI = require(ServerStorage.Logic.EntityAI)
+local RateLimiter = require(ServerStorage.Logic.RateLimiter)
 local Types = require(ReplicatedStorage.Shared.Types)
 local GameConfig = require(ReplicatedStorage.Shared.GameConfig)
 local Remotes = require(ReplicatedStorage.Remotes.RemotesManifest)
@@ -79,6 +80,12 @@ local lastEchoPosition: Vector3? = nil
 local lastPhase: Types.RoundPhase = RoundService.getRoundManager():getPhase()
 local missingEntityWarned = false
 local initialized = false
+
+-- Anti-flood des Remotes Écho (garde EXTERNE générique, complémentaire des
+-- cooldowns de gameplay déjà présents dans EchoController/onMeleeAttack). Un
+-- token bucket par (joueur, Remote). IS_STUDIO gate le warn (une fois par rafale).
+local rateLimiter: RateLimiter.RateLimiter = RateLimiter.new()
+local IS_STUDIO = RunService:IsStudio()
 
 -- ───────────────────────────────────────────────────────────────────────
 -- Helpers monde (défensifs : perso pas chargé / corps retiré)
@@ -398,6 +405,23 @@ end
 -- Remotes (client → serveur) — AUTORITÉ SERVEUR STRICTE
 -- ───────────────────────────────────────────────────────────────────────
 
+-- Décorateur anti-flood (identique à PlayerService) : garde token bucket posée
+-- au site de branchement, corps du handler intact. Rejet → drop silencieux
+-- (+ warn une fois par rafale en Studio). Les Remotes Écho portent 0 ou 1 charge.
+local function guarded(name: string, capacity: number, refillPerSec: number, handler: (Player, any) -> ())
+	return function(player: Player, payload: any)
+		local uid = player.UserId
+		local allowed, firstRejection = rateLimiter:allow(uid, name, capacity, refillPerSec, os.clock())
+		if not allowed then
+			if IS_STUDIO and firstRejection then
+				warn(string.format("[EchoService] Rate limit : %s rejeté (rafale) pour le joueur %d.", name, uid))
+			end
+			return
+		end
+		handler(player, payload)
+	end
+end
+
 -- Identité = TOUJOURS `player` (OnServerEvent). Revalidation : seul l'Écho humain
 -- COURANT est accepté. Un survivant (ou quiconque ≠ Écho) est rejeté ici.
 local function onActivateAbility(player: Player, abilityId: unknown)
@@ -483,6 +507,7 @@ end
 
 local function removePlayer(player: Player)
 	roleManager:onPlayerLeft(player.UserId)
+	rateLimiter:removePlayer(player.UserId) -- libère les seaux anti-flood du joueur
 end
 
 -- ───────────────────────────────────────────────────────────────────────
@@ -508,8 +533,10 @@ function EchoService.init()
 	Players.PlayerAdded:Connect(registerPlayer)
 	Players.PlayerRemoving:Connect(removePlayer)
 
-	Remotes.ActivateAbility.OnServerEvent:Connect(onActivateAbility)
-	Remotes.MeleeAttack.OnServerEvent:Connect(onMeleeAttack)
+	-- Limites premier jet (généreuses, ⚠️ PARI) : garde anti-flood en plus des
+	-- cooldowns de gameplay (Howl/Frénésie dans EchoController, mêlée 2 s ici).
+	Remotes.ActivateAbility.OnServerEvent:Connect(guarded("ActivateAbility", 4, 2, onActivateAbility))
+	Remotes.MeleeAttack.OnServerEvent:Connect(guarded("MeleeAttack", 5, 3, onMeleeAttack))
 
 	RunService.Heartbeat:Connect(tick)
 end
