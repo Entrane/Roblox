@@ -51,6 +51,7 @@ export type HudPlayerState = {
 	stamina: number, -- 0 .. GameConfig.Stamina.Max
 	battery: number, -- 0 .. GameConfig.Torch.BatteryMax
 	lifeState: PlayerLifeState, -- pour le feedback d'état du joueur lui-même
+	torchOn: boolean, -- état AUTORITAIRE de la torche (pilote la PointLight client)
 }
 
 -- ═══════════════════════════════════════════════════════════════════════

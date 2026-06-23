@@ -368,6 +368,7 @@ local function tick(dt: number)
 					stamina = snapshot.stamina,
 					battery = snapshot.battery,
 					lifeState = snapshot.lifeState,
+					torchOn = snapshot.torchOn,
 				})
 			end
 		end

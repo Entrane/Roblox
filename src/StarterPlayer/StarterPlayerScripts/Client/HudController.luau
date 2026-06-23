@@ -201,6 +201,34 @@ local function onFuseProgress(progress: Types.FuseProgress)
 	fuseLabel.Text = string.format("Fusibles %d/%d", progress.collected, progress.required)
 end
 
+-- Torche AUTORITAIRE : la PointLight (locale, non répliquée) suit l'état serveur
+-- torchOn reçu, pas l'intention client. Si la batterie se vide serveur-side,
+-- torchOn passe false → la lumière s'éteint correctement.
+local function setTorchLight(on: boolean)
+	local character = localPlayer.Character
+	if not character then
+		return
+	end
+	local hrp = character:FindFirstChild("HumanoidRootPart")
+	if not hrp then
+		return
+	end
+	local light = hrp:FindFirstChild("TorchLight")
+	if not light then
+		if not on then
+			return
+		end
+		local pl = Instance.new("PointLight")
+		pl.Name = "TorchLight"
+		pl.Brightness = 2.5
+		pl.Range = 18
+		pl.Color = Color3.fromRGB(255, 244, 214)
+		pl.Parent = hrp
+		light = pl
+	end
+	(light :: PointLight).Enabled = on
+end
+
 local function onPlayerHud(state: Types.HudPlayerState)
 	if type(state) ~= "table" then
 		return
@@ -212,6 +240,7 @@ local function onPlayerHud(state: Types.HudPlayerState)
 		batteryFill.Size = UDim2.fromScale(math.clamp(state.battery / GameConfig.Torch.BatteryMax, 0, 1), 1)
 	end
 	setStatus(state.lifeState)
+	setTorchLight(state.torchOn)
 end
 
 -- Décompte local du timer entre deux pushes (le serveur ne tourne le timer qu'en
@@ -362,6 +391,9 @@ function HudController.setRole(role: Types.Role?)
 	end
 	if statusLabel and role ~= Types.Role.Survivor then
 		statusLabel.Visible = false
+	end
+	if role ~= Types.Role.Survivor then
+		setTorchLight(false) -- pas de torche pour l'Écho (évite une lumière fantôme)
 	end
 	showOnboarding(role) -- objectif du rôle, 5 s
 end
