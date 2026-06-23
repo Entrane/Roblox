@@ -10,7 +10,9 @@
 
 # EXCEPTION — sauvegarde versionnée de la map (voir place/README.md).
 # Workspace.Map n'est PAS synchronisé par Rojo (construit à la main) : on garde
-# un export XML de secours, malgré la règle *.rbxmx ci-dessus.
+# un export de secours, malgré les règles *.rbxm / *.rbxmx ci-dessus.
+# .rbxm = binaire, .rbxmx = XML — on accepte les deux selon le format du Save to File.
+!place/Map.rbxm
 !place/Map.rbxmx
 
 # ─── Outils Lua / Luau ──────────────────────────────────────────────────
