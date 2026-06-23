@@ -13,6 +13,7 @@ local SoundConfig = {
 	GENERATOR_UNLOCK = "placeholder_generator_unlock",
 	ROUND_START = "placeholder_round_start", -- entrée Playing
 	ROUND_END = "placeholder_round_end", -- entrée Resolved
+	ECHO_ATTACK = "placeholder_echo_attack", -- coup de mêlée réussi de l'Écho
 
 	-- Client (joués par SoundController depuis RoundState/QuestState/XpResult)
 	ROUND_STARTING = "placeholder_round_starting", -- entrée Starting (décompte)

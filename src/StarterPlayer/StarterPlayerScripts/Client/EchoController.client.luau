@@ -17,16 +17,24 @@
 -- les positions non pingées (cela demanderait une réplication custom, hors MVP).
 
 local Players = game:GetService("Players")
+local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
 local ContextActionService = game:GetService("ContextActionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Types = require(ReplicatedStorage.Shared.Types)
+local GameConfig = require(ReplicatedStorage.Shared.GameConfig)
 local Remotes = require(ReplicatedStorage.Remotes.RemotesManifest)
 local HudController = require(script.Parent.HudController)
 
+local localPlayer = Players.LocalPlayer
 local HOWL_ACTION = "SL_Howl"
 local FRENZY_ACTION = "SL_Frenzy"
+local MELEE_ACTION = "SL_Melee"
+local MELEE_SCAN_INTERVAL = 0.2 -- s
+local meleeScanAccum = 0
+local meleeButtonShown = false
 
 local active = false
 -- { any } : RBXScriptConnection inconnu hors Studio (cf. InputController).
@@ -50,6 +58,64 @@ local function onFrenzyKey(_action: string, state: Enum.UserInputState): Enum.Co
 		activateAbility(Types.AbilityId.Frenzy)
 	end
 	return Enum.ContextActionResult.Pass
+end
+
+-- Demande de mêlée : aucune cible envoyée, le SERVEUR la résout (et revalide
+-- portée/cooldown/lifeState). Le client ne fait que signaler l'intention.
+local function requestMelee()
+	Remotes.MeleeAttack:FireServer()
+end
+
+local function onMeleeKey(_action: string, state: Enum.UserInputState): Enum.ContextActionResult
+	if state == Enum.UserInputState.Begin then
+		requestMelee()
+	end
+	return Enum.ContextActionResult.Pass
+end
+
+local function hrpOf(character: Instance?): BasePart?
+	if not character then
+		return nil
+	end
+	local root = character:FindFirstChild("HumanoidRootPart")
+	if root and root:IsA("BasePart") then
+		return root
+	end
+	return nil
+end
+
+-- Scan LOCAL : un survivant à portée de mêlée ? (pour la visibilité du bouton
+-- seulement — la cible réelle reste résolue serveur). True si un autre personnage
+-- vivant (Health > 0) est à <= AttackRange de l'Écho.
+local function aSurvivorInRange(): boolean
+	local myHRP = hrpOf(localPlayer.Character)
+	if not myHRP then
+		return false
+	end
+	local range = GameConfig.Entity.AttackRange
+	for _, other in Players:GetPlayers() do
+		if other ~= localPlayer and other.Character then
+			local hum = other.Character:FindFirstChildOfClass("Humanoid")
+			local hrp = hrpOf(other.Character)
+			if hum and hrp and hum.Health > 0 and (hrp.Position - myHRP.Position).Magnitude <= range then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+local function onMeleeScan(dt: number)
+	meleeScanAccum += dt
+	if meleeScanAccum < MELEE_SCAN_INTERVAL then
+		return
+	end
+	meleeScanAccum = 0
+	local inRange = aSurvivorInRange()
+	if inRange ~= meleeButtonShown then
+		meleeButtonShown = inRange
+		HudController.setMeleeVisible(inRange)
+	end
 end
 
 -- Dossier conteneur des Highlights (dans Workspace, local). Les Highlights y
@@ -142,10 +208,21 @@ local function activate()
 			activateAbility(Types.AbilityId.Frenzy)
 		end)))
 	end
+	-- Mêlée : bouton contextuel (visibilité pilotée par le scan) + touche E.
+	local meleeBtn = HudController.getButton("Melee")
+	if meleeBtn then
+		table.insert(connections, (meleeBtn.Activated:Connect(requestMelee)))
+	end
 
-	-- Clavier (test PC).
+	-- Clavier (test PC). Mêlée = E (l'Écho n'a pas de torche → pas de conflit).
 	ContextActionService:BindAction(HOWL_ACTION, onHowlKey, false, Enum.KeyCode.Q)
 	ContextActionService:BindAction(FRENZY_ACTION, onFrenzyKey, false, Enum.KeyCode.R)
+	ContextActionService:BindAction(MELEE_ACTION, onMeleeKey, false, Enum.KeyCode.E)
+
+	-- Scan de proximité (visibilité du bouton mêlée).
+	meleeScanAccum = 0
+	meleeButtonShown = false
+	table.insert(connections, (RunService.Heartbeat:Connect(onMeleeScan)))
 
 	-- Flux serveur→client réservés à l'Écho.
 	table.insert(connections, (Remotes.Echolocation.OnClientEvent:Connect(onEcholocation)))
@@ -165,6 +242,9 @@ local function deactivate()
 
 	ContextActionService:UnbindAction(HOWL_ACTION)
 	ContextActionService:UnbindAction(FRENZY_ACTION)
+	ContextActionService:UnbindAction(MELEE_ACTION)
+	HudController.setMeleeVisible(false)
+	meleeButtonShown = false
 
 	clearMarkers()
 end

@@ -48,6 +48,7 @@ local LABELS: { [string]: string } = {
 	Revive = "Réanimer",
 	Howl = "Hurlement",
 	Frenzy = "Frénésie",
+	Melee = "Attaquer",
 }
 
 -- ───────────────────────────────────────────────────────────────────────
@@ -278,6 +279,7 @@ function HudController.init()
 	buttons.Revive = makeButton("Revive", 1)
 	buttons.Howl = makeButton("Howl", 2)
 	buttons.Frenzy = makeButton("Frenzy", 1)
+	buttons.Melee = makeButton("Melee", 3) -- Écho, contextuel (proximité)
 	for _, btn in buttons do
 		btn.Parent = actions
 	end
@@ -385,6 +387,9 @@ function HudController.setRole(role: Types.Role?)
 	if buttons.Revive then
 		buttons.Revive.Visible = false -- contextuel (ReviveController)
 	end
+	if buttons.Melee then
+		buttons.Melee.Visible = false -- contextuel Écho (EchoController.client, proximité)
+	end
 	-- Barres + statut : survivant uniquement (l'Écho ne reçoit pas PlayerHud).
 	if statsFrame then
 		statsFrame.Visible = role == Types.Role.Survivor
@@ -400,6 +405,12 @@ end
 
 function HudController.getButton(name: string): TextButton?
 	return buttons[name]
+end
+
+function HudController.setMeleeVisible(visible: boolean)
+	if buttons.Melee then
+		buttons.Melee.Visible = visible
+	end
 end
 
 function HudController.setReviveVisible(visible: boolean)

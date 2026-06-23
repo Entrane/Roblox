@@ -52,6 +52,7 @@ local EVENT_NAMES = {
 	"SetReviving", -- (targetUserId: number) — survivant ; cible DONNÉE, revalidée serveur
 	"StopReviving", -- () — survivant ; le sauveteur relâche
 	"ActivateAbility", -- (abilityId: string=Types.AbilityId) — ÉCHO ; émetteur revalidé == Écho
+	"MeleeAttack", -- () — ÉCHO ; aucune cible (résolue serveur) ; émetteur + portée + cooldown revalidés
 
 	-- ── Serveur → client (poussés, CIBLÉS, jamais FireAllClients) ──
 	"Echolocation", -- (pings: {Types.EcholocationPing}) — au SEUL client Écho, au pulse
@@ -94,6 +95,7 @@ export type Remotes = {
 	SetReviving: RemoteEvent,
 	StopReviving: RemoteEvent,
 	ActivateAbility: RemoteEvent,
+	MeleeAttack: RemoteEvent,
 	-- Serveur → client (ciblés)
 	Echolocation: RemoteEvent,
 	EchoState: RemoteEvent,

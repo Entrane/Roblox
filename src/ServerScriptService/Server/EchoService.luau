@@ -40,6 +40,7 @@ local EntityAI = require(ServerStorage.Logic.EntityAI)
 local Types = require(ReplicatedStorage.Shared.Types)
 local GameConfig = require(ReplicatedStorage.Shared.GameConfig)
 local Remotes = require(ReplicatedStorage.Remotes.RemotesManifest)
+local SoundConfig = require(ReplicatedStorage.Shared.SoundConfig)
 local RoundService = require(script.Parent.RoundService)
 local PlayerService = require(script.Parent.PlayerService)
 
@@ -63,6 +64,10 @@ local echoController: EchoController.EchoController? = nil
 local entityAI: EntityAI.EntityAI? = nil
 local mode: Mode? = nil
 local echoUserId: number? = nil
+
+-- Cooldown de mêlée de l'Écho HUMAIN (séparé du cooldown IA, géré dans EntityAI).
+-- Sentinelle très négative → première attaque toujours autorisée. Reset au démarrage.
+local lastMeleeAt = -1e9
 
 -- Dernière position connue de l'Écho HUMAIN, mise à jour CHAQUE tick humain.
 -- Sert de point d'apparition à l'entité IA si l'Écho humain quitte en cours de
@@ -312,6 +317,7 @@ local function onPlayingStarted()
 	echoController = EchoController.new()
 	lastEchoPosition = nil
 	missingEntityWarned = false
+	lastMeleeAt = -1e9 -- mêlée immédiatement disponible pour le nouvel Écho
 
 	if roleManager:isHumanEcho() then
 		mode = "Human"
@@ -408,6 +414,55 @@ local function onActivateAbility(player: Player, abilityId: unknown)
 	controller:requestAbility(abilityId :: Types.AbilityId) -- ignore en plus id invalide / cooldown
 end
 
+-- Cible de mêlée résolue 100 % SERVEUR (le client n'en fournit aucune) : survivant
+-- inscrit Alive/Downed le plus proche DANS AttackRange de `echoPos`. Priorité
+-- Alive > Downed puis distance (cohérent avec EntityAI.selectTarget). nil sinon.
+local function resolveMeleeTarget(echoPos: Vector3): number?
+	local playerState = PlayerService.getPlayerState()
+	local range = GameConfig.Entity.AttackRange
+	local bestAlive: number?, bestAliveDist = nil, range
+	local bestDowned: number?, bestDownedDist = nil, range
+
+	for userId, snap in playerState:getAllStates() do
+		if snap.lifeState == Types.LifeState.Alive or snap.lifeState == Types.LifeState.Downed then
+			local pos = getRootPosition(userId)
+			if pos then
+				local d = (pos - echoPos).Magnitude
+				if d <= range then
+					if snap.lifeState == Types.LifeState.Alive and d < bestAliveDist then
+						bestAlive, bestAliveDist = userId, d
+					elseif snap.lifeState == Types.LifeState.Downed and d < bestDownedDist then
+						bestDowned, bestDownedDist = userId, d
+					end
+				end
+			end
+		end
+	end
+	return bestAlive or bestDowned
+end
+
+-- Mêlée de l'Écho humain. AUTORITÉ SERVEUR : identité (player) + Écho courant +
+-- cooldown + portée + lifeState tous revalidés. Aucune cible reçue du client.
+local function onMeleeAttack(player: Player)
+	if mode ~= "Human" or player.UserId ~= echoUserId then
+		return -- pas l'Écho courant
+	end
+	if os.clock() - lastMeleeAt < GameConfig.Entity.AttackCooldown then
+		return -- cooldown (anti-spam du Remote)
+	end
+	local echoPos = getRootPosition(player.UserId)
+	if not echoPos then
+		return -- perso pas chargé
+	end
+	local targetId = resolveMeleeTarget(echoPos)
+	if not targetId then
+		return -- aucune cible valide en portée : swing dans le vide, pas de cooldown
+	end
+	lastMeleeAt = os.clock() -- consommé seulement sur un coup RÉUSSI
+	PlayerService.applyAttack(targetId) -- Alive→Downed / Downed→Dead (+ crédit kill-XP)
+	Remotes.SoundEvent:FireClient(player, { soundId = SoundConfig.ECHO_ATTACK })
+end
+
 -- ───────────────────────────────────────────────────────────────────────
 -- Joueurs : présence suivie par RoleManager + (re)notification de rôle
 -- ───────────────────────────────────────────────────────────────────────
@@ -454,6 +509,7 @@ function EchoService.init()
 	Players.PlayerRemoving:Connect(removePlayer)
 
 	Remotes.ActivateAbility.OnServerEvent:Connect(onActivateAbility)
+	Remotes.MeleeAttack.OnServerEvent:Connect(onMeleeAttack)
 
 	RunService.Heartbeat:Connect(tick)
 end
