@@ -8,6 +8,11 @@
 *.rbxl.lock
 *.rbxlx.lock
 
+# EXCEPTION — sauvegarde versionnée de la map (voir place/README.md).
+# Workspace.Map n'est PAS synchronisé par Rojo (construit à la main) : on garde
+# un export XML de secours, malgré la règle *.rbxmx ci-dessus.
+!place/Map.rbxmx
+
 # ─── Outils Lua / Luau ──────────────────────────────────────────────────
 # Dossier de dépendances Wally (gestionnaire de paquets Roblox)
 /Packages/
