@@ -325,9 +325,10 @@ function HudController.init()
 	phaseCenter.Parent = gui
 	phaseCenterLabel = phaseCenter
 
-	-- Écran de fin (centre, plus grand) : qui a gagné. Tous rôles (RoundState
-	-- est FireAllClients). Masqué hors Resolved.
-	local result = makeLabel("Result", UDim2.new(0.5, -260, 0.4, -40), UDim2.fromOffset(520, 80))
+	-- Écran de fin (HAUT-centre) : qui a gagné. Remonté en tête pour laisser le
+	-- centre au leaderboard de fin de manche (ProgressionController). Tous rôles
+	-- (RoundState est FireAllClients). Masqué hors Resolved.
+	local result = makeLabel("Result", UDim2.new(0.5, -260, 0.06, 0), UDim2.fromOffset(520, 70))
 	result.TextColor3 = Color3.fromRGB(255, 235, 160)
 	result.Visible = false
 	result.Parent = gui

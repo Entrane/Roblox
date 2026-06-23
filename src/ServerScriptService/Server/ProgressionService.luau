@@ -33,6 +33,7 @@ local ServerStorage = game:GetService("ServerStorage")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local StatsAggregator = require(ServerStorage.Logic.StatsAggregator)
+local LeaderboardBuilder = require(ServerStorage.Logic.LeaderboardBuilder)
 local Types = require(ReplicatedStorage.Shared.Types)
 local Remotes = require(ReplicatedStorage.Remotes.RemotesManifest)
 local RoundService = require(script.Parent.RoundService)
@@ -382,6 +383,7 @@ end
 type Snap = {
 	player: Player,
 	uid: number,
+	name: string, -- DisplayName capturé en SYNCHRONE (robuste à un départ pendant les yields)
 	matchXp: number,
 	escaped: boolean,
 	isEcho: boolean,
@@ -440,6 +442,7 @@ local function onResolved()
 		table.insert(snaps, {
 			player = player,
 			uid = uid,
+			name = player.DisplayName,
 			matchXp = matchXp,
 			escaped = escaped,
 			isEcho = isEcho,
@@ -463,6 +466,9 @@ local function onResolved()
 
 	-- Award asynchrone : IsFriendsWith + DataStore yield → hors du tick.
 	task.spawn(function()
+		-- Entrées du leaderboard collectées au fil de la boucle (xpGained final
+		-- connu seulement après calcul) ; triées + diffusées APRÈS la boucle.
+		local entries: { Types.LeaderboardEntry } = {}
 		for _, s in snaps do
 			local cache = xpCache[s.uid]
 			if cache then
@@ -509,8 +515,29 @@ local function onResolved()
 				sendQuestState(s.player, s.uid)
 				savePlayer(s.uid)
 				updateLeaderstats(s.player, s.uid) -- Tab rafraîchi (Niveau/Victoires/K/D)
+
+				-- Ligne de leaderboard (won = faction gagnante).
+				local won = (s.isEcho and winner == Types.Faction.Echo)
+					or (not s.isEcho and winner == Types.Faction.Survivors)
+				table.insert(entries, {
+					userId = s.uid,
+					name = s.name,
+					isEcho = s.isEcho,
+					won = won,
+					xpGained = gained,
+					kills = s.roundStats.kills,
+					deposits = s.roundStats.deposits,
+					revives = s.roundStats.revives,
+					survivalSeconds = s.roundStats.survivalSeconds,
+				})
 			end
 		end
+
+		-- Diffusion UNIQUE du classement trié à TOUS (données non secrètes).
+		Remotes.RoundLeaderboard:FireAllClients({
+			winner = winner,
+			entries = LeaderboardBuilder.build(entries),
+		})
 	end)
 end
 

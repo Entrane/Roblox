@@ -280,4 +280,27 @@ export type QuestState = {
 	activeTitle: string?,
 }
 
+-- Une ligne du leaderboard de fin de manche. `name` = DisplayName résolu côté
+-- serveur (gère un joueur parti, évite un lookup client). `won` = appartient à
+-- la faction gagnante. Toutes les valeurs concernent CETTE manche (pas la vie).
+export type LeaderboardEntry = {
+	userId: number, -- pour que le client surligne SA ligne
+	name: string,
+	isEcho: boolean, -- rôle affiché (Écho / Survivant)
+	won: boolean, -- sur la faction gagnante (mise en évidence)
+	xpGained: number, -- clé de tri (décroissant)
+	kills: number,
+	deposits: number,
+	revives: number,
+	survivalSeconds: number,
+}
+
+-- Payload RoundLeaderboard (FireAllClients, UNE fois au Resolved). Données NON
+-- secrètes (post-manche) → broadcast à tous. `entries` est DÉJÀ trié (rang =
+-- position dans la liste).
+export type RoundLeaderboard = {
+	winner: Faction?,
+	entries: { LeaderboardEntry },
+}
+
 return Types

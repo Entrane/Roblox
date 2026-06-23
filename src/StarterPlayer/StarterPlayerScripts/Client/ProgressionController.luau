@@ -33,6 +33,12 @@ local xpLevelLabel: TextLabel? = nil
 local xpFriendLabel: TextLabel? = nil
 local inviteButton: TextButton? = nil
 
+-- Leaderboard de fin de manche (centre). Lignes pré-créées (≤5 joueurs).
+local leaderboardPanel: Frame? = nil
+type LbRow = { frame: Frame, label: TextLabel, stroke: UIStroke }
+local lbRows: { LbRow } = {}
+local LB_MAX_ROWS = 5
+
 -- ───────────────────────────────────────────────────────────────────────
 -- Fabriques
 -- ───────────────────────────────────────────────────────────────────────
@@ -60,6 +66,10 @@ local function onRoundState(state: Types.RoundState)
 	end
 	if questPanel then
 		questPanel.Visible = state.phase == Types.RoundPhase.Lobby or state.phase == Types.RoundPhase.Starting
+	end
+	-- Le leaderboard n'a de sens qu'en Resolved : on le masque dès qu'on en sort.
+	if leaderboardPanel and state.phase ~= Types.RoundPhase.Resolved then
+		leaderboardPanel.Visible = false
 	end
 	-- L'écran XP n'a de sens qu'en Resolved : on le masque dès qu'on en sort.
 	if xpPanel and state.phase ~= Types.RoundPhase.Resolved then
@@ -144,6 +154,39 @@ local function onXpResult(result: Types.XpResult)
 	xpPanel.Visible = true
 end
 
+-- Reçu UNE fois au Resolved (FireAllClients) : remplit le classement trié.
+-- Faction gagnante teintée ; ligne du joueur local encadrée (UIStroke).
+local function onRoundLeaderboard(board: Types.RoundLeaderboard)
+	if type(board) ~= "table" or type(board.entries) ~= "table" or not leaderboardPanel then
+		return
+	end
+	for i, row in lbRows do
+		local e = board.entries[i]
+		if e then
+			row.frame.Visible = true
+			local role = if e.isEcho then "Écho" else "Survivant"
+			row.label.Text = string.format(
+				"%d. %s  [%s]  +%d XP   K%d · F%d · R%d · %ds",
+				i, e.name, role, e.xpGained, e.kills, e.deposits, e.revives, e.survivalSeconds
+			)
+			-- Teinte faction gagnante.
+			if e.won then
+				row.frame.BackgroundColor3 = Color3.fromRGB(40, 90, 50)
+				row.frame.BackgroundTransparency = 0.4
+				row.label.TextColor3 = Color3.fromRGB(190, 240, 190)
+			else
+				row.frame.BackgroundTransparency = 1
+				row.label.TextColor3 = Color3.fromRGB(225, 225, 225)
+			end
+			-- Encadré pour la ligne du joueur local.
+			row.stroke.Transparency = if e.userId == localPlayer.UserId then 0 else 1
+		else
+			row.frame.Visible = false
+		end
+	end
+	leaderboardPanel.Visible = true
+end
+
 -- ───────────────────────────────────────────────────────────────────────
 -- Construction
 -- ───────────────────────────────────────────────────────────────────────
@@ -183,11 +226,11 @@ function ProgressionController.init()
 		questLines[i].TextSize = 16
 	end
 
-	-- Écran XP de fin (bas-centre, sous l'écran de résultat P2-8).
+	-- Écran XP de fin (BAS-centre) : tes gains perso, sous le leaderboard central.
 	local xp = Instance.new("Frame")
 	xp.Name = "XpResult"
 	xp.Size = UDim2.fromOffset(460, 218)
-	xp.Position = UDim2.new(0.5, -230, 0.5, 0)
+	xp.Position = UDim2.new(0.5, -230, 0.62, 0)
 	xp.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
 	xp.BackgroundTransparency = 0.4
 	xp.Visible = false
@@ -227,11 +270,50 @@ function ProgressionController.init()
 	end)
 	inviteButton = invite
 
+	-- Leaderboard de fin (CENTRE) : panneau principal, sous la bannière vainqueur.
+	local board = Instance.new("Frame")
+	board.Name = "Leaderboard"
+	board.Size = UDim2.fromOffset(560, 36 + LB_MAX_ROWS * 30 + 8)
+	board.Position = UDim2.new(0.5, -280, 0.20, 0)
+	board.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+	board.BackgroundTransparency = 0.4
+	board.Visible = false
+	board.Parent = gui
+	leaderboardPanel = board
+
+	local boardTitle = makeLabel(board, UDim2.fromOffset(10, 4), UDim2.fromOffset(540, 26), false)
+	boardTitle.Text = "Classement de la manche"
+	boardTitle.TextSize = 18
+	boardTitle.TextColor3 = Color3.fromRGB(255, 235, 160)
+
+	for i = 1, LB_MAX_ROWS do
+		local row = Instance.new("Frame")
+		row.Name = "Row" .. i
+		row.Size = UDim2.fromOffset(540, 28)
+		row.Position = UDim2.fromOffset(10, 36 + (i - 1) * 30)
+		row.BackgroundColor3 = Color3.fromRGB(40, 90, 50)
+		row.BackgroundTransparency = 1
+		row.BorderSizePixel = 0
+		row.Visible = false
+		row.Parent = board
+
+		local stroke = Instance.new("UIStroke")
+		stroke.Thickness = 2
+		stroke.Color = Color3.fromRGB(150, 210, 255)
+		stroke.Transparency = 1 -- masqué par défaut (révélé pour le joueur local)
+		stroke.Parent = row
+
+		local lbl = makeLabel(row, UDim2.fromOffset(6, 0), UDim2.fromOffset(528, 28), false)
+		lbl.TextSize = 14
+		lbRows[i] = { frame = row, label = lbl, stroke = stroke }
+	end
+
 	screenGui = gui
 
 	Remotes.RoundState.OnClientEvent:Connect(onRoundState)
 	Remotes.QuestState.OnClientEvent:Connect(onQuestState)
 	Remotes.XpResult.OnClientEvent:Connect(onXpResult)
+	Remotes.RoundLeaderboard.OnClientEvent:Connect(onRoundLeaderboard)
 end
 
 return ProgressionController

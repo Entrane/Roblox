@@ -63,6 +63,7 @@ local EVENT_NAMES = {
 	"RoundState", -- (state: Types.RoundState) — FireAllClients ; phase/timer/winner
 	"FuseProgress", -- (progress: Types.FuseProgress) — FireAllClients ; x/5
 	"PlayerHud", -- (state: Types.HudPlayerState) — FireClient au SEUL joueur concerné
+	"RoundLeaderboard", -- (board: Types.RoundLeaderboard) — FireAllClients, 1× au Resolved ; classement
 
 	-- ── Serveur → client (progression, FireClient ciblé) ──
 	"XpResult", -- (result: Types.XpResult) — FireClient en fin de manche
@@ -104,6 +105,7 @@ export type Remotes = {
 	RoundState: RemoteEvent,
 	FuseProgress: RemoteEvent,
 	PlayerHud: RemoteEvent,
+	RoundLeaderboard: RemoteEvent,
 	-- Serveur → client (progression)
 	XpResult: RemoteEvent,
 	QuestState: RemoteEvent,
