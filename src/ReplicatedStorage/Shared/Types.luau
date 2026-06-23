@@ -234,13 +234,27 @@ export type XpBreakdown = {
 	quests: number, -- récompenses de quêtes complétées CETTE manche
 }
 
+-- Stats INDIVIDUELLES brutes d'une manche (comptes, pas de l'XP). Affichées sous
+-- le gain XP en fin de manche. `survivalSeconds` = durée Playing jusqu'à
+-- mort/évasion du joueur (ou fin de manche s'il a survécu).
+export type RoundStats = {
+	deposits: number, -- fusibles déposés
+	revives: number, -- réanimations réussies
+	kills: number, -- kills (0 si pas l'Écho)
+	survivalSeconds: number,
+}
+
 -- Payload XpResult (FireClient, fin de manche). `friendBonus` = XP bonus dû aux
 -- amis (déjà inclus dans xpGained). `suggestInvite` = manche à < 4 joueurs.
+-- `newTitles` = titres débloqués CETTE manche (pour « Titre débloqué : X ! »).
 export type XpResult = {
 	xp: number, -- XP total cumulé
 	level: number, -- niveau dérivé de xp
 	xpGained: number, -- XP gagné CETTE manche (perf×bonus amis + quêtes)
 	breakdown: XpBreakdown,
+	stats: RoundStats, -- compteurs bruts de la manche
+	activeTitle: string?, -- titre actif (auto = dernier débloqué pour le MVP)
+	newTitles: { string }, -- titres fraîchement débloqués cette manche
 	friendBonus: number,
 	friendCount: number,
 	suggestInvite: boolean,
@@ -257,9 +271,13 @@ export type Quest = {
 	xpReward: number,
 }
 
--- Payload QuestState (FireClient, au chargement + après chaque manche).
+-- Payload QuestState (FireClient, au chargement + après chaque manche). Porte
+-- aussi le niveau et le titre actif → le lobby les affiche sans attendre un
+-- XpResult (qui n'arrive qu'en fin de manche).
 export type QuestState = {
 	quests: { Quest },
+	level: number,
+	activeTitle: string?,
 }
 
 return Types

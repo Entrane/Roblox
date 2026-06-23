@@ -22,10 +22,13 @@ local localPlayer = Players.LocalPlayer
 
 local screenGui: ScreenGui? = nil
 local questPanel: Frame? = nil
+local questLevelLabel: TextLabel? = nil -- « Niveau N — Titre » (lobby)
 local questLines: { TextLabel } = {}
 local xpPanel: Frame? = nil
 local xpGainedLabel: TextLabel? = nil
+local xpTitleLabel: TextLabel? = nil -- titre actif / « Titre débloqué : X ! »
 local xpBreakdownLabel: TextLabel? = nil
+local xpStatsLabel: TextLabel? = nil -- stats brutes de la manche
 local xpLevelLabel: TextLabel? = nil
 local xpFriendLabel: TextLabel? = nil
 local inviteButton: TextButton? = nil
@@ -68,6 +71,14 @@ local function onQuestState(state: Types.QuestState)
 	if type(state) ~= "table" or type(state.quests) ~= "table" then
 		return
 	end
+	if questLevelLabel then
+		local title = state.activeTitle
+		if type(title) == "string" and title ~= "" then
+			questLevelLabel.Text = string.format("Niveau %d — %s", state.level, title)
+		else
+			questLevelLabel.Text = string.format("Niveau %d", state.level)
+		end
+	end
 	for i, line in questLines do
 		local q = state.quests[i]
 		if q then
@@ -87,11 +98,33 @@ local function onXpResult(result: Types.XpResult)
 	if xpGainedLabel then
 		xpGainedLabel.Text = string.format("+%d XP", result.xpGained)
 	end
+	-- Titre : un nouveau débloqué (mis en avant) sinon le titre actif courant.
+	if xpTitleLabel then
+		local newTitles = result.newTitles
+		if type(newTitles) == "table" and #newTitles > 0 then
+			xpTitleLabel.Text = string.format("🏆 Titre débloqué : %s !", newTitles[#newTitles])
+			xpTitleLabel.TextColor3 = Color3.fromRGB(255, 215, 90)
+			xpTitleLabel.Visible = true
+		elseif type(result.activeTitle) == "string" and result.activeTitle ~= "" then
+			xpTitleLabel.Text = string.format("Titre : %s", result.activeTitle)
+			xpTitleLabel.TextColor3 = Color3.fromRGB(200, 200, 210)
+			xpTitleLabel.Visible = true
+		else
+			xpTitleLabel.Visible = false
+		end
+	end
 	if xpBreakdownLabel then
 		local b = result.breakdown
 		xpBreakdownLabel.Text = string.format(
 			"Participation %d · Évasion %d · Fusibles %d · Réa %d · Kills %d · Quêtes %d",
 			b.participation, b.escaped, b.deposits, b.revives, b.kills, b.quests
+		)
+	end
+	if xpStatsLabel then
+		local s = result.stats
+		xpStatsLabel.Text = string.format(
+			"Manche : Fusibles %d · Réa %d · Kills %d · Survie %d s",
+			s.deposits, s.revives, s.kills, s.survivalSeconds
 		)
 	end
 	if xpLevelLabel then
@@ -128,7 +161,7 @@ function ProgressionController.init()
 	-- Panneau de quêtes (gauche, visible en Lobby/Starting).
 	local quests = Instance.new("Frame")
 	quests.Name = "Quests"
-	quests.Size = UDim2.fromOffset(360, 130)
+	quests.Size = UDim2.fromOffset(360, 156)
 	quests.Position = UDim2.fromOffset(12, 120)
 	quests.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
 	quests.BackgroundTransparency = 0.45
@@ -139,8 +172,13 @@ function ProgressionController.init()
 	local title = makeLabel(quests, UDim2.fromOffset(8, 4), UDim2.fromOffset(344, 26), true)
 	title.Text = "Quêtes du jour"
 	title.TextColor3 = Color3.fromRGB(255, 235, 160)
+	-- Niveau + titre actif (sous le titre du panneau).
+	questLevelLabel = makeLabel(quests, UDim2.fromOffset(8, 30), UDim2.fromOffset(344, 22), false)
+	questLevelLabel.TextSize = 16
+	questLevelLabel.TextColor3 = Color3.fromRGB(180, 210, 255)
+	questLevelLabel.Text = "Niveau 1"
 	for i = 1, 3 do
-		questLines[i] = makeLabel(quests, UDim2.fromOffset(8, 4 + i * 30), UDim2.fromOffset(344, 26), false)
+		questLines[i] = makeLabel(quests, UDim2.fromOffset(8, 54 + (i - 1) * 30), UDim2.fromOffset(344, 26), false)
 		questLines[i].TextScaled = false
 		questLines[i].TextSize = 16
 	end
@@ -148,8 +186,8 @@ function ProgressionController.init()
 	-- Écran XP de fin (bas-centre, sous l'écran de résultat P2-8).
 	local xp = Instance.new("Frame")
 	xp.Name = "XpResult"
-	xp.Size = UDim2.fromOffset(460, 170)
-	xp.Position = UDim2.new(0.5, -230, 0.55, 0)
+	xp.Size = UDim2.fromOffset(460, 218)
+	xp.Position = UDim2.new(0.5, -230, 0.5, 0)
 	xp.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
 	xp.BackgroundTransparency = 0.4
 	xp.Visible = false
@@ -158,18 +196,24 @@ function ProgressionController.init()
 
 	xpGainedLabel = makeLabel(xp, UDim2.fromOffset(10, 6), UDim2.fromOffset(440, 36), true)
 	xpGainedLabel.TextColor3 = Color3.fromRGB(255, 235, 160)
-	xpLevelLabel = makeLabel(xp, UDim2.fromOffset(10, 46), UDim2.fromOffset(440, 24), false)
+	xpTitleLabel = makeLabel(xp, UDim2.fromOffset(10, 44), UDim2.fromOffset(440, 24), false)
+	xpTitleLabel.TextSize = 17
+	xpTitleLabel.Visible = false
+	xpLevelLabel = makeLabel(xp, UDim2.fromOffset(10, 70), UDim2.fromOffset(440, 24), false)
 	xpLevelLabel.TextSize = 18
-	xpBreakdownLabel = makeLabel(xp, UDim2.fromOffset(10, 72), UDim2.fromOffset(440, 22), false)
+	xpBreakdownLabel = makeLabel(xp, UDim2.fromOffset(10, 96), UDim2.fromOffset(440, 20), false)
 	xpBreakdownLabel.TextSize = 14
-	xpFriendLabel = makeLabel(xp, UDim2.fromOffset(10, 96), UDim2.fromOffset(440, 22), false)
+	xpStatsLabel = makeLabel(xp, UDim2.fromOffset(10, 118), UDim2.fromOffset(440, 20), false)
+	xpStatsLabel.TextSize = 14
+	xpStatsLabel.TextColor3 = Color3.fromRGB(200, 220, 200)
+	xpFriendLabel = makeLabel(xp, UDim2.fromOffset(10, 140), UDim2.fromOffset(440, 20), false)
 	xpFriendLabel.TextSize = 15
 	xpFriendLabel.TextColor3 = Color3.fromRGB(150, 210, 255)
 
 	local invite = Instance.new("TextButton")
 	invite.Name = "Invite"
 	invite.Size = UDim2.fromOffset(440, 40)
-	invite.Position = UDim2.fromOffset(10, 124)
+	invite.Position = UDim2.fromOffset(10, 168)
 	invite.BackgroundColor3 = Color3.fromRGB(45, 90, 60)
 	invite.TextColor3 = Color3.fromRGB(235, 235, 235)
 	invite.TextScaled = true

@@ -64,6 +64,12 @@ local roundKills = 0 -- nb de Downed→Dead causés par applyAttack (= kills de 
 local roundRevives: { [number]: number } = {} -- rescuerId -> nb de réanimations réussies
 local lastRescuerOf: { [number]: number } = {} -- targetId -> sauveteur tenant la réa (ce tick)
 
+-- Temps de survie : instant (os.clock) d'entrée en Playing, et instant figé où
+-- chaque joueur cesse de survivre (transition vers Dead OU Escaped). Lu par
+-- getRoundStats au Resolved. Réinitialisés à l'entrée Playing.
+local playingStartedAt: number? = nil
+local survivalEndAt: { [number]: number } = {} -- userId -> os.clock() de mort/évasion
+
 local initialized = false
 
 -- ───────────────────────────────────────────────────────────────────────
@@ -180,6 +186,13 @@ local function onLifeStateChanged(userId: number, previous: Types.PlayerLifeStat
 	elseif current == Types.LifeState.Dead then
 		enterDead(userId)
 	end
+
+	-- Temps de survie : on fige l'instant à la PREMIÈRE bascule vers Dead ou
+	-- Escaped (un joueur ne survit plus au-delà). Idempotent : on n'écrase pas un
+	-- instant déjà posé (ex. Escaped puis un éventuel Dead résiduel).
+	if (current == Types.LifeState.Dead or current == Types.LifeState.Escaped) and not survivalEndAt[userId] then
+		survivalEndAt[userId] = os.clock()
+	end
 end
 
 -- ───────────────────────────────────────────────────────────────────────
@@ -267,6 +280,8 @@ local function onPlayingStarted()
 	roundKills = 0
 	roundRevives = {}
 	lastRescuerOf = {}
+	playingStartedAt = os.clock()
+	survivalEndAt = {}
 end
 
 -- Sortie de Playing : reset EXPLICITE du front montant de résolution (et non
@@ -482,8 +497,18 @@ end
 
 -- Lecture : compteurs de manche pour la progression (lus par ProgressionService
 -- au Resolved, AVANT le reset du prochain onPlayingStarted).
-function PlayerService.getRoundStats(): { kills: number, revives: { [number]: number } }
-	return { kills = roundKills, revives = roundRevives }
+function PlayerService.getRoundStats(): { kills: number, revives: { [number]: number }, survival: { [number]: number } }
+	-- Temps de survie par joueur PRÉSENT : de l'entrée Playing jusqu'à sa
+	-- mort/évasion, ou jusqu'à maintenant (Resolved) s'il a tenu jusqu'au bout.
+	local start = playingStartedAt or os.clock()
+	local now = os.clock()
+	local survival: { [number]: number } = {}
+	for _, player in Players:GetPlayers() do
+		local uid = player.UserId
+		local endAt = survivalEndAt[uid] or now
+		survival[uid] = math.max(0, math.floor(endAt - start))
+	end
+	return { kills = roundKills, revives = roundRevives, survival = survival }
 end
 
 -- Écriture ciblée : un pickup de pile (FuseService/interaction) recharge la torche.

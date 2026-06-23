@@ -14,10 +14,17 @@
 -- Caches mémoire distincts. Chargement au PlayerAdded, sauvegarde au Resolved, au
 -- PlayerRemoving et au BindToClose. Stores/namespaces séparés → aucun conflit.
 --
--- ⚠️ TODO RÉCOMPENSES PAR PALIER (à designer) : aujourd'hui le NIVEAU est purement
--- indicatif (aucune récompense matérielle). À définir plus tard : que donner à
--- chaque palier (cosmétiques ? skins d'Écho ? variantes de capacités ?), et le
--- canal d'attribution (probablement ici, à la montée de niveau détectée au award).
+-- ─── RÉCOMPENSES PAR PALIER (titres) ────────────────────────────────────
+-- Chaque palier de niveau (table MILESTONES) débloque un TITRE cosmétique,
+-- persisté dans PlayerXP_v1 (unlockedTitles + activeTitle) et poussé au client
+-- via XpResult (fin de manche) + QuestState (lobby). Le titre actif est, pour le
+-- MVP, AUTO-sélectionné = dernier débloqué.
+--
+-- ⚠️ TODO : skins / cosmétiques 3D — la structure {level, rewardType, rewardValue}
+-- est déjà prête à accueillir d'autres rewardType que "title" (ex. "skin"),
+-- mais cela demande des assets et un canal d'équipement (hors MVP).
+-- ⚠️ TODO : choix MANUEL du titre actif par le joueur (Remote SetActiveTitle +
+-- validation « titre possédé »). Pour l'instant : auto = dernier débloqué.
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -52,11 +59,40 @@ local XP_PER_LEVEL = 500 -- courbe simple : niveau = floor(xp / 500) + 1
 local XP_STORE = "PlayerXP_v1"
 local QUEST_STORE = "DailyQuests_v1"
 
+-- Paliers de récompense. rewardType = "title" uniquement pour le MVP (cf. TODO
+-- skins en tête de fichier). Triés par niveau croissant (getMilestoneRewards et
+-- le backfill de migration s'appuient sur cet ordre).
+type Milestone = { level: number, rewardType: string, rewardValue: string }
+local MILESTONES: { Milestone } = {
+	{ level = 1, rewardType = "title", rewardValue = "Nouveau Venu" },
+	{ level = 3, rewardType = "title", rewardValue = "Recrue du Bunker" },
+	{ level = 5, rewardType = "title", rewardValue = "Survivant Endurci" },
+	{ level = 8, rewardType = "title", rewardValue = "Veilleur de Nuit" },
+	{ level = 10, rewardType = "title", rewardValue = "Chasseur de l'Ombre" },
+	{ level = 15, rewardType = "title", rewardValue = "Briseur de Silence" },
+	{ level = 20, rewardType = "title", rewardValue = "Rescapé du Signal" },
+	{ level = 25, rewardType = "title", rewardValue = "Fantôme du Bunker" },
+	{ level = 30, rewardType = "title", rewardValue = "Spectre du Signal" },
+	{ level = 40, rewardType = "title", rewardValue = "Légende de Signal Lost" },
+}
+
+-- Pure : titres (rewardValue) débloqués en passant STRICTEMENT de oldLevel à
+-- newLevel (oldLevel < palier <= newLevel). Vide si pas de montée de palier.
+local function getMilestoneRewards(oldLevel: number, newLevel: number): { string }
+	local rewards: { string } = {}
+	for _, m in MILESTONES do
+		if m.rewardType == "title" and m.level > oldLevel and m.level <= newLevel then
+			table.insert(rewards, m.rewardValue)
+		end
+	end
+	return rewards
+end
+
 -- ───────────────────────────────────────────────────────────────────────
 -- État de module
 -- ───────────────────────────────────────────────────────────────────────
 
-type XpData = { totalXp: number }
+type XpData = { totalXp: number, unlockedTitles: { string }, activeTitle: string? }
 type QuestData = { date: string, gamesPlayed: number, q1Done: boolean, q2Done: boolean, q3Done: boolean }
 
 local xpStore = DataStoreService:GetDataStore(XP_STORE)
@@ -84,6 +120,38 @@ local function levelFromXp(xp: number): number
 	return math.floor(xp / XP_PER_LEVEL) + 1
 end
 
+-- Fusionne `additions` dans `titles` SANS doublon (préserve l'ordre d'arrivée).
+-- Sert au backfill de migration et à l'union anti-perte au save.
+local function mergeTitles(titles: { string }, additions: { string })
+	local seen: { [string]: boolean } = {}
+	for _, t in titles do
+		seen[t] = true
+	end
+	for _, t in additions do
+		if not seen[t] then
+			seen[t] = true
+			table.insert(titles, t)
+		end
+	end
+end
+
+-- Le titre actif par défaut (MVP) = le DERNIER débloqué = le palier le plus
+-- élevé atteint. On parcourt MILESTONES (ordre croissant) et on retient le
+-- dernier titre possédé. nil si aucun (ne devrait pas arriver, niveau 1 = palier).
+local function lastUnlockedTitle(titles: { string }): string?
+	local owned: { [string]: boolean } = {}
+	for _, t in titles do
+		owned[t] = true
+	end
+	local result: string? = nil
+	for _, m in MILESTONES do
+		if m.rewardType == "title" and owned[m.rewardValue] then
+			result = m.rewardValue
+		end
+	end
+	return result
+end
+
 local function defaultQuests(): QuestData
 	return { date = todayUTC(), gamesPlayed = 0, q1Done = false, q2Done = false, q3Done = false }
 end
@@ -101,12 +169,15 @@ end
 
 local function buildQuestState(uid: number): Types.QuestState
 	local q = questCache[uid] or defaultQuests()
+	local xp = xpCache[uid]
 	return {
 		quests = {
 			{ id = "q1", label = "Jouer 3 parties", progress = math.min(q.gamesPlayed, 3), goal = 3, complete = q.q1Done, xpReward = QUEST1_XP },
 			{ id = "q2", label = "Gagner en tant qu'Écho", progress = if q.q2Done then 1 else 0, goal = 1, complete = q.q2Done, xpReward = QUEST2_XP },
 			{ id = "q3", label = "Gagner en tant que Survivant", progress = if q.q3Done then 1 else 0, goal = 1, complete = q.q3Done, xpReward = QUEST3_XP },
 		},
+		level = if xp then levelFromXp(xp.totalXp) else 1,
+		activeTitle = if xp then xp.activeTitle else nil,
 	}
 end
 
@@ -125,14 +196,33 @@ local function loadPlayer(player: Player)
 	local ok, data = pcall(function()
 		return xpStore:GetAsync(key)
 	end)
+	local totalXp = 0
+	local titles: { string } = {}
+	local activeTitle: string? = nil
 	if ok and type(data) == "table" then
-		xpCache[uid] = { totalXp = tonumber(data.totalXp) or 0 }
-	else
-		xpCache[uid] = { totalXp = 0 }
-		if not ok then
-			warn("[ProgressionService] GetAsync XP échoué pour " .. key .. " : valeurs par défaut.")
+		totalXp = tonumber(data.totalXp) or 0
+		-- Sanitation : on ne garde que des chaînes (record legacy ou corrompu).
+		if type(data.unlockedTitles) == "table" then
+			for _, t in data.unlockedTitles do
+				if type(t) == "string" then
+					table.insert(titles, t)
+				end
+			end
 		end
+		if type(data.activeTitle) == "string" then
+			activeTitle = data.activeTitle
+		end
+	elseif not ok then
+		warn("[ProgressionService] GetAsync XP échoué pour " .. key .. " : valeurs par défaut.")
 	end
+	-- Migration / cohérence : un compte (legacy ou non) doit posséder TOUS les
+	-- titres mérités par son niveau actuel, même si le champ n'existait pas.
+	mergeTitles(titles, getMilestoneRewards(0, levelFromXp(totalXp)))
+	-- Auto-sélection MVP du titre actif s'il manque ou n'est plus possédé.
+	if activeTitle == nil or not table.find(titles, activeTitle) then
+		activeTitle = lastUnlockedTitle(titles)
+	end
+	xpCache[uid] = { totalXp = totalXp, unlockedTitles = titles, activeTitle = activeTitle }
 
 	local ok2, qdata = pcall(function()
 		return questStore:GetAsync(key)
@@ -179,7 +269,18 @@ local function savePlayer(uid: number, force: boolean?)
 			xpStore:UpdateAsync(key, function(old)
 				-- max() : ne jamais régresser l'XP si une autre session avait écrit plus.
 				local prev = (type(old) == "table" and tonumber(old.totalXp)) or 0
-				return { totalXp = math.max(prev, xp.totalXp) }
+				-- Union des titres : on repart des titres déjà en base (autre session)
+				-- et on y fusionne ceux du cache → aucun titre gagné n'est perdu.
+				local merged: { string } = {}
+				if type(old) == "table" and type(old.unlockedTitles) == "table" then
+					for _, t in old.unlockedTitles do
+						if type(t) == "string" then
+							table.insert(merged, t)
+						end
+					end
+				end
+				mergeTitles(merged, xp.unlockedTitles)
+				return { totalXp = math.max(prev, xp.totalXp), unlockedTitles = merged, activeTitle = xp.activeTitle }
 			end)
 		end)
 	end
@@ -233,6 +334,7 @@ type Snap = {
 	escaped: boolean,
 	isEcho: boolean,
 	breakdown: Types.XpBreakdown,
+	roundStats: Types.RoundStats,
 }
 
 local function countFriends(player: Player, snaps: { Snap }): number
@@ -271,10 +373,14 @@ local function onResolved()
 		local escaped = lifeSnap ~= nil and lifeSnap.lifeState == Types.LifeState.Escaped
 		local isEcho = echoId ~= nil and uid == echoId
 
+		local nDeposits = deposits[uid] or 0
+		local nRevives = stats.revives[uid] or 0
+		local nKills = if isEcho then stats.kills else 0
+
 		local xpEscaped = if escaped then XP_ESCAPED else 0
-		local xpDeposits = (deposits[uid] or 0) * XP_FUSE
-		local xpRevives = (stats.revives[uid] or 0) * XP_REVIVE
-		local xpKills = if isEcho then stats.kills * XP_KILL else 0
+		local xpDeposits = nDeposits * XP_FUSE
+		local xpRevives = nRevives * XP_REVIVE
+		local xpKills = nKills * XP_KILL
 		local matchXp = XP_PARTICIPATION + xpEscaped + xpDeposits + xpRevives + xpKills
 
 		table.insert(snaps, {
@@ -291,6 +397,12 @@ local function onResolved()
 				kills = xpKills,
 				quests = 0, -- complété ci-dessous
 			},
+			roundStats = {
+				deposits = nDeposits,
+				revives = nRevives,
+				kills = nKills,
+				survivalSeconds = stats.survival[uid] or 0,
+			},
 		})
 	end
 
@@ -304,14 +416,27 @@ local function onResolved()
 				local questReward = updateQuests(s.uid, s.isEcho, winner, s.escaped)
 				local gained = s.matchXp + bonus + questReward
 
+				-- Détection de palier : niveau AVANT vs APRÈS le gain de cette manche.
+				local oldLevel = levelFromXp(cache.totalXp)
 				cache.totalXp += gained
+				local newLevel = levelFromXp(cache.totalXp)
 				s.breakdown.quests = questReward
+
+				local newTitles = getMilestoneRewards(oldLevel, newLevel)
+				if #newTitles > 0 then
+					mergeTitles(cache.unlockedTitles, newTitles)
+					-- Auto-sélection MVP : le plus haut palier franchi (dernier de la liste).
+					cache.activeTitle = newTitles[#newTitles]
+				end
 
 				Remotes.XpResult:FireClient(s.player, {
 					xp = cache.totalXp,
-					level = levelFromXp(cache.totalXp),
+					level = newLevel,
 					xpGained = gained,
 					breakdown = s.breakdown,
+					stats = s.roundStats,
+					activeTitle = cache.activeTitle,
+					newTitles = newTitles,
 					friendBonus = bonus,
 					friendCount = friendCount,
 					suggestInvite = playerCount < 4,
